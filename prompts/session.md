@@ -109,10 +109,21 @@ app.post('/api/login', (req, res) => {
   res.json({ success: true, user: { username: user.username, fullName: user.fullName } });
 });
 
+// For API routes — unauthenticated → JSON 401
 function requireSession(req, res, next) {
   const sid = getSid(req);
   const session = sid ? sessions.get(sid) : null;
   if (!session) return res.status(401).json({ error: 'Not authenticated' });
+  req.session = session;
+  req.sid = sid;
+  next();
+}
+
+// For page routes — unauthenticated → redirect to /login (never return JSON)
+function requirePage(req, res, next) {
+  const sid = getSid(req);
+  const session = sid ? sessions.get(sid) : null;
+  if (!session) return res.redirect('/login');
   req.session = session;
   req.sid = sid;
   next();
@@ -140,8 +151,14 @@ app.get('/api/notes', requireSession, (req, res) => {
 ### Page routing
 
 ```js
-app.get('/login', (req, res) => res.send(LOGIN_HTML));
-app.get('/dashboard', requireSession, (req, res) => res.send(DASHBOARD_HTML));
+// /login: if already authenticated, skip the form and go straight to dashboard
+app.get('/login', (req, res) => {
+  const sid = getSid(req);
+  if (sid && sessions.has(sid)) return res.redirect('/dashboard');
+  res.send(LOGIN_HTML);
+});
+// Use requirePage (not requireSession) — page routes must redirect, not return JSON
+app.get('/dashboard', requirePage, (req, res) => res.send(DASHBOARD_HTML));
 app.get('/', (req, res) => {
   const sid = getSid(req);
   res.redirect(sid && sessions.has(sid) ? '/dashboard' : '/login');
@@ -441,7 +458,7 @@ document.getElementById('btn-read-3054').addEventListener('click', function() {
 
 ### File: `session/session-hardened-server.js`
 
-Identical to port 3052. **Only change: the Set-Cookie header.**
+Identical to port 3052 — same two-middleware pattern (`requireSession` for API routes, `requirePage` for page routes). **Only change: the Set-Cookie header.**
 
 ```js
 // ✅ HttpOnly: not readable by JS
@@ -543,3 +560,5 @@ npm run hardened  # terminal 3 → localhost:3054
 5. **Sessions Map is per-process.** Both `session-server.js` and `session-hardened-server.js` have their own in-memory Map. Tokens from one server are not valid on the other — this is correct behavior and expected.
 
 6. **The `document.cookie` dashboard display** on port 3052 must run after the page loads and the user is authenticated. Put it in the inline `<script>` that also calls `GET /api/me` to restore session. If `document.cookie` is empty (not logged in yet), show `(login first to see your session cookie)`.
+
+7. **Two auth middlewares — never use `requireSession` on page routes.** `requireSession` returns `401 JSON` and is for API endpoints only (`/api/me`, `/api/notes`, `/api/logout`). `requirePage` redirects to `/login` and is for HTML page routes (`/dashboard`). Using `requireSession` on `/dashboard` causes the browser to display raw `{"error":"Not authenticated"}` JSON instead of showing the login page. Both `session-server.js` and `session-hardened-server.js` must define and use both middlewares.

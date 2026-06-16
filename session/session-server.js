@@ -342,10 +342,21 @@ app.post('/api/login', function (req, res) {
   });
 });
 
+// For API routes — unauthenticated → JSON 401
 function requireSession(req, res, next) {
   const sid = getSid(req);
   const session = sid ? sessions.get(sid) : null;
   if (!session) return res.status(401).json({ error: 'Not authenticated' });
+  req.session = session;
+  req.sid = sid;
+  next();
+}
+
+// For page routes — unauthenticated → redirect to /login (never return JSON)
+function requirePage(req, res, next) {
+  const sid = getSid(req);
+  const session = sid ? sessions.get(sid) : null;
+  if (!session) return res.redirect('/login');
   req.session = session;
   req.sid = sid;
   next();
@@ -370,10 +381,12 @@ app.get('/api/notes', requireSession, function (req, res) {
 });
 
 app.get('/login', function (req, res) {
+  const sid = getSid(req);
+  if (sid && sessions.has(sid)) return res.redirect('/dashboard');
   res.send(LOGIN_HTML);
 });
 
-app.get('/dashboard', requireSession, function (req, res) {
+app.get('/dashboard', requirePage, function (req, res) {
   res.send(DASHBOARD_HTML);
 });
 
