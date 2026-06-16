@@ -60,12 +60,12 @@ Client                          Server (port 3049)
   │←── 401 ────────────────────────────┤
   │
   │   Browser shows native dialog
-  │   User enters: alice / letmein
+  │   User enters: alice / pass1234
   │
   ├── GET /protected ─────────────────→│
   │   Authorization: Basic YWxpY2U6c3Vuc2hpbmU5OQ==
-  │   (base64 of "alice:letmein" — not encrypted!)
-  │                                    │ atob("YWxpY2U6c3Vuc2hpbmU5OQ==") → "alice:letmein"
+  │   (base64 of "alice:pass1234" — not encrypted!)
+  │                                    │ atob("YWxpY2U6c3Vuc2hpbmU5OQ==") → "alice:pass1234"
   │←── 200 + content ──────────────────┤
 
 Vulnerability: credentials sent on EVERY request in base64 (not encryption!)

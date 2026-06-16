@@ -33,11 +33,9 @@ function basicAuth(req, res, next) {
     return res.status(401).json({ error: 'Authentication required' });
   }
 
-  const base64 = authHeader.slice(6);
-  const decoded = Buffer.from(base64, 'base64').toString('utf8');
-  const colonIndex = decoded.indexOf(':');
-  const username = decoded.substring(0, colonIndex);
-  const password = decoded.substring(colonIndex + 1);
+  const base64 = authHeader.slice(6); // strip "Basic "
+  const decoded = Buffer.from(base64, 'base64').toString('utf8'); // → "alice:213123..."
+  const [username, password] = decoded.split(':');
 
   const user = USERS.find(function (u) {
     return u.username === username && u.password === password;
