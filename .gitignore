@@ -1,0 +1,39 @@
+# Dependencies — covers all concept subfolders recursively
+node_modules/
+
+# Environment and secrets
+# Each concept server can optionally load secrets from .env
+# e.g. JWT_SECRET=... ACCESS_SECRET=... REFRESH_SECRET=...
+.env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# Cursor AI
+.cursor/
+
+# Runtime data
+# All auth state (sessions, tokens, API keys) is in-memory — no persistent files expected.
+# If a concept server ever writes to disk, ignore it here:
+*.sqlite
+*.db
+data/
+
+# VS Code
+.vscode/
