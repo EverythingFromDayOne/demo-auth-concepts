@@ -1,0 +1,13 @@
+{
+  "name": "magic-links-demo",
+  "version": "1.0.0",
+  "scripts": {
+    "vulnerable": "node vulnerable-server.js",
+    "guide": "node guide-server.js",
+    "secure": "node secure-server.js",
+    "start": "node vulnerable-server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
