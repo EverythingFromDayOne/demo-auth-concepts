@@ -19,7 +19,7 @@
 **Tagline:** "Ship faster, stay secure"  
 **Folder:** `auth-concepts/access-refresh/`
 
-Access tokens are short-lived JWTs used for API calls. Refresh tokens are long-lived opaque tokens stored server-side, used only to get new access tokens. The vulnerable version issues refresh tokens that never expire and aren't rotated — if stolen, an attacker has permanent access. The secure version rotates refresh tokens on every use and revokes all refresh tokens on password change.
+Access tokens are short-lived JWTs used for API calls. Refresh tokens are long-lived opaque tokens stored server-side, used only to get new access tokens. **Refresh tokens always live in an httpOnly cookie** — not in JS memory or localStorage — so they survive page reloads (F5) and are invisible to JavaScript. The vulnerable version stores a cookie that never expires and never rotates. The secure version rotates the cookie on every use and revokes all tokens on password change.
 
 ---
 
@@ -106,38 +106,53 @@ function issueRefreshToken(user) {
 }
 ```
 
+### Cookie helper + CORS
+
+```js
+// Refresh token travels in httpOnly cookie — not in request body
+app.use(cors({ origin: 'http://localhost:3062', credentials: true }));
+
+function getRefreshCookie(req) {
+  const raw = req.headers.cookie || '';
+  const match = raw.match(/(?:^|;\s*)ar_refresh=([^;]+)/);
+  return match ? match[1] : null;
+}
+```
+
 ### Endpoints
 
 ```js
-// POST /api/login → { accessToken, refreshToken, expiresIn }
+// POST /api/login → sets ar_refresh httpOnly cookie + returns { accessToken }
+// ⚠️ VULNERABLE: cookie never expires and is never rotated
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
   const user = USERS.find(u => u.username === username && u.password === password);
   if (!user) return res.status(401).json({ error: 'Invalid credentials' });
 
-  res.json({
-    accessToken:  issueAccessToken(user),
-    refreshToken: issueRefreshToken(user),
-    tokenType:    'Bearer',
-    expiresIn:    '15m',
-    note: '⚠ Refresh token never expires and is never rotated — if stolen, attacker has permanent access'
-  });
-});
-
-// POST /api/refresh → { accessToken }
-// ⚠️ VULNERABLE: issues new access token WITHOUT invalidating the old refresh token
-app.post('/api/refresh', (req, res) => {
-  const { refreshToken } = req.body;
-  const stored = refreshToken ? refreshTokenStore.get(refreshToken) : null;
-  if (!stored) return res.status(401).json({ error: 'Invalid refresh token' });
-
-  const user = USERS.find(u => u.id === stored.userId);
-  // ⚠️ Refresh token is NOT rotated — same token works forever
+  const refreshToken = issueRefreshToken(user);
+  res.setHeader('Set-Cookie', 'ar_refresh=' + refreshToken + '; HttpOnly; SameSite=Strict; Path=/');
   res.json({
     accessToken: issueAccessToken(user),
     tokenType: 'Bearer',
     expiresIn: '15m',
-    warning: '⚠ Old refresh token still valid — no rotation. Token count in store: ' + refreshTokenStore.size
+    note: '⚠ Refresh cookie never expires and is never rotated',
+  });
+});
+
+// POST /api/refresh — reads cookie, issues new access token, does NOT rotate cookie
+// ⚠️ VULNERABLE: same cookie stays valid forever
+app.post('/api/refresh', (req, res) => {
+  const refreshToken = getRefreshCookie(req);
+  const stored = refreshToken ? refreshTokenStore.get(refreshToken) : null;
+  if (!stored) return res.status(401).json({ error: 'No valid refresh token' });
+
+  const user = USERS.find(u => u.id === stored.userId);
+  // ⚠️ Cookie NOT rotated — same token remains valid forever
+  res.json({
+    accessToken: issueAccessToken(user),
+    tokenType: 'Bearer',
+    expiresIn: '15m',
+    warning: '⚠ Refresh cookie not rotated. Store size: ' + refreshTokenStore.size,
   });
 });
 
@@ -165,17 +180,12 @@ app.get('/api/me', requireAccess, (req, res) => {
   res.json({ sub: req.user.sub, username: req.user.username, role: req.user.role, tokenExpiresAt: new Date(req.user.exp * 1000).toISOString() });
 });
 
-// POST /api/logout — deletes the specific refresh token
-// ⚠️ VULNERABLE: only removes this one token; if the attacker already copied it, their copy still works
-//   (no family revocation, no "revoke all" capability)
+// POST /api/logout — reads cookie, deletes from store, clears cookie
 app.post('/api/logout', (req, res) => {
-  const { refreshToken } = req.body;
-  if (refreshToken && refreshTokenStore.has(refreshToken)) {
-    refreshTokenStore.delete(refreshToken);
-    res.json({ message: 'Logged out — this refresh token deleted', tokensRemaining: refreshTokenStore.size });
-  } else {
-    res.status(400).json({ error: 'Refresh token not found or already revoked' });
-  }
+  const refreshToken = getRefreshCookie(req);
+  if (refreshToken) refreshTokenStore.delete(refreshToken);
+  res.setHeader('Set-Cookie', 'ar_refresh=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+  res.json({ message: 'Logged out — refresh cookie cleared' });
 });
 ```
 
@@ -183,46 +193,65 @@ app.post('/api/logout', (req, res) => {
 
 Colors: `#0f172a` background, `#1e293b` card, `#f1f5f9` text, `#0ea5e9` accent (sky blue).
 
-**Four-panel layout:**
+**Four-panel layout (all panels except login are hidden until authenticated):**
 
-1. **Login panel** — username/password → issues both tokens
-2. **Token status panel** — shows both tokens with age, countdowns, vulnerability note
-3. **API test panel** — call `/api/me` and `/api/projects`; shows "401 Access token expired" after 15 min
-4. **Refresh panel** — call `/api/refresh` with the refresh token → gets new access token
+1. **Login panel** — username/password → server sets httpOnly cookie + returns access token
+2. **Token status panel** — shows access token; refresh token section explains it's in httpOnly cookie
+3. **API test panel** — call `/api/me` and `/api/projects`
+4. **Refresh panel** — call `POST /api/refresh` with no body (cookie sent automatically)
+
+**Silent session restore on page load (F5 keeps user logged in):**
+
+```js
+var liveAccessToken = null;
+
+function showDashboard(accessToken) {
+  liveAccessToken = accessToken;
+  document.getElementById('access-token-display').textContent = accessToken;
+  document.getElementById('login-panel').style.display = 'none';
+  document.getElementById('token-status').style.display = '';
+  document.getElementById('api-panel').style.display = '';
+  document.getElementById('refresh-panel').style.display = '';
+  document.getElementById('btn-signout').style.display = '';
+}
+
+function showLogin() {
+  liveAccessToken = null;
+  document.getElementById('token-status').style.display = 'none';
+  document.getElementById('api-panel').style.display = 'none';
+  document.getElementById('refresh-panel').style.display = 'none';
+  document.getElementById('btn-signout').style.display = 'none';
+  document.getElementById('login-panel').style.display = '';
+}
+
+// On every page load: try to restore session silently using the httpOnly cookie
+(async function restoreSession() {
+  try {
+    var res = await fetch('/api/refresh', { method: 'POST' });
+    if (res.ok) { var data = await res.json(); showDashboard(data.accessToken); }
+  } catch (e) {}
+})();
+```
+
+**Token status panel — refresh token described as httpOnly cookie (not shown in JS):**
 
 ```html
-<div class="panel" id="token-status" style="display:none">
-  <div style="margin-bottom:1rem">
-    <div style="font-size:0.75rem;color:#94a3b8;margin-bottom:0.25rem">ACCESS TOKEN (expires in 15 min)</div>
-    <div id="access-token-display" style="font-family:monospace;font-size:0.7rem;word-break:break-all;background:#0f172a;padding:0.75rem;border-radius:6px;color:#a78bfa"></div>
-  </div>
-  <div>
-    <div style="font-size:0.75rem;color:#94a3b8;margin-bottom:0.25rem">REFRESH TOKEN (never expires ⚠)</div>
-    <div id="refresh-token-display" style="font-family:monospace;font-size:0.7rem;word-break:break-all;background:#0f172a;padding:0.75rem;border-radius:6px;color:#f87171"></div>
-  </div>
-  <div style="margin-top:0.75rem;padding:0.6rem;background:#7f1d1d;border-radius:6px;font-size:0.8rem;color:#fca5a5">
-    ⚠ Vulnerable: If an attacker captures this refresh token (e.g. from logs, MITM, XSS),
-    they can get new access tokens indefinitely — there is no way to invalidate the specific token
-    without clearing the entire store.
+<div>
+  <label>REFRESH TOKEN (httpOnly cookie — survives F5, invisible to JS)</label>
+  <div class="token-box" style="color:#94a3b8;font-size:0.8rem">
+    Stored in <code style="color:#f87171">ar_refresh</code> httpOnly cookie.
+    JavaScript cannot read it — but it is sent automatically on every request to this origin.<br><br>
+    ⚠ Vulnerability: this cookie never expires and is never rotated on use.
   </div>
 </div>
 ```
 
-**Sign Out button** in the top bar. Calls `POST /api/logout` with the current refresh token, then clears both tokens from memory and resets the UI to the login panel:
+**Sign Out button** — no body needed; server reads and clears the cookie:
 
 ```js
 document.getElementById('btn-signout').addEventListener('click', async function() {
-  if (liveRefreshToken) {
-    await fetch('http://localhost:3061/api/logout', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: liveRefreshToken })
-    }).catch(function() {});
-  }
-  liveAccessToken = null;
-  liveRefreshToken = null;
-  document.getElementById('token-status').style.display = 'none';
-  document.getElementById('login-panel').style.display = '';
+  await fetch('/api/logout', { method: 'POST' }).catch(function() {});
+  showLogin();
 });
 ```
 
@@ -519,82 +548,136 @@ document.getElementById('btn-live-refresh').addEventListener('click', async func
 
 ### File: `access-refresh/flow-strong-server.js`
 
-Same as port 3061. Key differences:
+Same as port 3061 but with strong secrets, cookie rotation, reuse detection, and per-user revocation.
+
+**Cookie helpers + CORS:**
+```js
+app.use(cors({ origin: 'http://localhost:3062', credentials: true }));
+
+function getRefreshCookie(req) {
+  const raw = req.headers.cookie || '';
+  const match = raw.match(/(?:^|;\s*)ar_refresh=([^;]+)/);
+  return match ? match[1] : null;
+}
+
+function setRefreshCookie(res, token) {
+  res.setHeader('Set-Cookie',
+    'ar_refresh=' + token + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + (7 * 24 * 60 * 60)
+  );
+}
+
+function clearRefreshCookie(res) {
+  res.setHeader('Set-Cookie', 'ar_refresh=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+}
+```
 
 **Strong secrets:**
 ```js
-const crypto = require('crypto');
 const ACCESS_SECRET = crypto.randomBytes(64).toString('hex');
-const REFRESH_SECRET = crypto.randomBytes(64).toString('hex');
+const REFRESH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 ```
 
-**Refresh token store with rotation tracking:**
+**Refresh token store with family tracking:**
 ```js
 // ✅ Each refresh token entry has a family ID — reuse of an old token revokes the whole family
-const refreshTokenStore = new Map();
-// token → { userId, username, familyId, version, issuedAt }
-// When rotated: old token deleted, new token added with same familyId and version+1
-// If an old (deleted) familyId token appears → reuse detected → revoke all family tokens
+const refreshTokenStore = new Map(); // token → { userId, username, familyId, version, issuedAt }
 const revokedFamilies = new Set();
+const rotatedTokens = new Map();     // old token → familyId (for reuse detection)
 ```
 
-**Rotation on refresh:**
+**Login — sets cookie, returns access token only:**
+```js
+app.post('/api/login', (req, res) => {
+  const user = USERS.find(u => u.username === username && u.password === password);
+  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+
+  const refreshToken = issueRefreshToken(user);
+  setRefreshCookie(res, refreshToken);
+  res.json({ accessToken: issueAccessToken(user), tokenType: 'Bearer', expiresIn: '15m',
+    note: '✅ Refresh token in httpOnly cookie. Rotates on every /api/refresh call.' });
+});
+```
+
+**Rotation + reuse detection on refresh — old cookie cleared, new cookie set:**
 ```js
 app.post('/api/refresh', (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = getRefreshCookie(req);
   const stored = refreshToken ? refreshTokenStore.get(refreshToken) : null;
 
   if (!stored) {
-    // Check if it was a previously valid token (reuse detection)
-    // In a real DB you'd check a revoked_tokens table
-    return res.status(401).json({ error: 'Invalid or expired refresh token' });
+    const familyId = refreshToken ? rotatedTokens.get(refreshToken) : null;
+    if (familyId) { revokeFamily(familyId); clearRefreshCookie(res); }
+    return res.status(401).json({ error: 'No valid refresh token' });
   }
 
   if (revokedFamilies.has(stored.familyId)) {
-    // Token reuse detected — this family was already revoked
-    return res.status(401).json({ error: 'Refresh token reuse detected — please log in again' });
+    clearRefreshCookie(res);
+    return res.status(401).json({ error: 'Session revoked — please log in again' });
+  }
+
+  if (Date.now() - stored.issuedAt > REFRESH_MAX_AGE_MS) {
+    refreshTokenStore.delete(refreshToken);
+    clearRefreshCookie(res);
+    return res.status(401).json({ error: 'Refresh token expired — please log in again' });
   }
 
   const user = USERS.find(u => u.id === stored.userId);
 
-  // ✅ ROTATION: delete old token, issue new one with same familyId
+  // ✅ ROTATION: delete old, record as rotated, issue new token in new cookie
   refreshTokenStore.delete(refreshToken);
+  rotatedTokens.set(refreshToken, stored.familyId);
 
-  const newRefreshToken = crypto.randomBytes(40).toString('hex');
-  refreshTokenStore.set(newRefreshToken, {
-    userId: user.id,
-    username: user.username,
-    familyId: stored.familyId,
-    version: stored.version + 1,
-    issuedAt: Date.now()
+  const newToken = crypto.randomBytes(40).toString('hex');
+  refreshTokenStore.set(newToken, {
+    userId: user.id, username: user.username, familyId: stored.familyId,
+    version: stored.version + 1, issuedAt: stored.issuedAt,
   });
 
-  res.json({
-    accessToken:  issueAccessToken(user),
-    refreshToken: newRefreshToken,
-    tokenType:    'Bearer',
-    expiresIn:    '15m',
-    note: '✅ Old refresh token invalidated. New refresh token issued (rotation applied).'
-  });
+  setRefreshCookie(res, newToken); // old cookie replaced by new cookie
+  res.json({ accessToken: issueAccessToken(user), tokenType: 'Bearer', expiresIn: '15m',
+    note: '✅ Refresh cookie rotated — old token invalidated, new cookie set.' });
 });
 ```
 
-**Revoke on password change:**
+**Logout — reads cookie, revokes, clears cookie:**
+```js
+app.post('/api/logout', (req, res) => {
+  const refreshToken = getRefreshCookie(req);
+  if (refreshToken && refreshTokenStore.has(refreshToken)) {
+    const stored = refreshTokenStore.get(refreshToken);
+    rotatedTokens.set(refreshToken, stored.familyId);
+    refreshTokenStore.delete(refreshToken);
+  }
+  clearRefreshCookie(res);
+  res.json({ message: '✅ Logged out — refresh cookie cleared' });
+});
+```
+
+**Revoke all sessions on password change — clears cookie:**
 ```js
 app.post('/api/change-password', requireAccess, (req, res) => {
-  // Revoke ALL refresh tokens for this user
+  const userId = req.user.sub;
   for (const [token, data] of refreshTokenStore.entries()) {
-    if (data.userId === req.user.sub) {
+    if (data.userId === userId) {
+      rotatedTokens.set(token, data.familyId);
+      revokedFamilies.add(data.familyId);
       refreshTokenStore.delete(token);
     }
   }
+  clearRefreshCookie(res);
   res.json({ message: '✅ Password changed. All sessions revoked — please log in again on all devices.' });
 });
 ```
 
+**Client JS — same `showDashboard()` / `showLogin()` / `restoreSession()` pattern as port 3061:**
+- No `liveRefreshToken` variable
+- Refresh button sends `POST /api/refresh` with no body — browser sends cookie, server sets new cookie
+- Change-password button sends only `Authorization: Bearer` — no refresh token in body
+- Sign out button sends `POST /api/logout` with no body
+
 **Green banner:**
 ```
-✅ HARDENED: Refresh tokens rotate on every use, expire after 7 days, and are revoked on password change.
+✅ HARDENED: Refresh tokens rotate on every use, expire after 7 days, live in httpOnly cookie, and are revoked on password change.
 ```
 
 ---
@@ -660,10 +743,16 @@ npm run strong      # terminal 3 → localhost:3063
 
 2. **`REFRESH_SECRET` is unused in this demo.** We define it for completeness (as production would use it to sign refresh tokens) but the demo stores refresh tokens as opaque bytes in a Map. Remove `REFRESH_SECRET` if it causes confusion, or keep it with a comment explaining when it would apply.
 
-3. **CORS on ports 3061 and 3063.** The guide (3062) calls both servers. Add `cors({ origin: 'http://localhost:3062' })` to both. The live demo buttons in the guide target port 3061 specifically.
+3. **CORS on ports 3061 and 3063.** The guide (3062) calls both servers. Add `cors({ origin: 'http://localhost:3062', credentials: true })` to both. The live demo buttons in the guide target port 3061 specifically. `credentials: true` is required for the browser to send/receive cookies on cross-origin requests.
 
 4. **Family ID for reuse detection (port 3063).** Generate `familyId = crypto.randomUUID()` at login and store it with the first refresh token. On rotation: keep the same familyId, increment `version`. Track used (rotated-away) tokens in a `revokedFamilies` Set — if a token arrives whose familyId is in this Set, revoke ALL tokens for that family. Without this, simple rotation still has a brief window where the old token can be replayed.
 
 5. **The `revokedFamilies` Set is in-memory.** On server restart it clears. For the demo this is fine and expected. Add a comment: `// In production: store revoked families in Redis with a TTL matching the max refresh token lifetime.`
 
-6. **The guide's live demo targets port 3061 (vulnerable) intentionally.** The user should observe that after calling `/api/refresh`, the OLD refresh token is still accepted by port 3061. This is the entire vulnerability. The button labels should make this explicit.
+6. **The guide's live demo targets port 3061 (vulnerable) intentionally.** The user should observe that after calling `/api/refresh`, the OLD refresh cookie is still valid on port 3061. This is the entire vulnerability. The button labels should make this explicit.
+
+7. **Refresh token is always in an httpOnly cookie — never in JS memory or localStorage.** On page reload (F5), the access token (in JS memory) is lost, but the httpOnly cookie survives. The page calls `POST /api/refresh` on load — if the cookie is valid, a new access token is issued silently and the user never sees the login screen. This is the correct real-world pattern.
+
+8. **The `restoreSession()` IIFE runs on every page load.** It calls `POST /api/refresh` with no body. If the httpOnly cookie is present and valid, the server returns a new access token and (on port 3063) also sets a new rotated cookie. If not, the user stays on the login panel.
+
+9. **No `liveRefreshToken` variable exists in the client.** The refresh token is entirely managed by the browser cookie mechanism — the JS never sees it. Any code that passes `refreshToken` in a request body is wrong for this pattern.

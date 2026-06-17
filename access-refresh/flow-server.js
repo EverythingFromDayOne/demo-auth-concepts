@@ -11,15 +11,23 @@ const cors = require('cors');
 const app = express();
 const PORT = 3061;
 
-app.use(cors({ origin: 'http://localhost:3062' }));
+app.use(cors({ origin: 'http://localhost:3062', credentials: true }));
 app.use(express.json());
 
-// ⚠️ VULNERABILITY: weak secrets, no rotation, refresh tokens never expire
+// Refresh token travels in httpOnly cookie — not in request body
+function getRefreshCookie(req) {
+  const raw = req.headers.cookie || '';
+  const match = raw.match(/(?:^|;\s*)ar_refresh=([^;]+)/);
+  return match ? match[1] : null;
+}
+
+// ⚠️ VULNERABILITY: weak secret, no rotation, refresh tokens never expire
 const ACCESS_SECRET = 'access-secret-weak';
 const ACCESS_EXPIRY = '15m';
 // REFRESH_SECRET unused — refresh tokens are opaque bytes stored in Map (see prompt note #2)
 const REFRESH_SECRET = 'refresh-secret-weak';
 
+// ⚠️ VULNERABILITY: stored forever, never rotated
 const refreshTokenStore = new Map();
 
 const USERS = [
@@ -167,7 +175,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </header>
   <div class="container">
     <div class="card" id="login-panel">
-      <h2>1. Login — Issue Access + Refresh Tokens</h2>
+      <h2>1. Login — httpOnly cookie + access token</h2>
       <label>Username</label>
       <input class="login-input" type="text" id="username" value="alice">
       <label>Password</label>
@@ -183,13 +191,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         <div class="token-box" id="access-token-display" style="color:#a78bfa"></div>
       </div>
       <div>
-        <label>REFRESH TOKEN (never expires ⚠)</label>
-        <div class="token-box" id="refresh-token-display" style="color:#f87171"></div>
+        <label>REFRESH TOKEN (httpOnly cookie — survives F5, invisible to JS)</label>
+        <div class="token-box" style="color:#94a3b8;font-size:0.8rem">
+          Stored in <code style="color:#f87171">ar_refresh</code> httpOnly cookie.
+          JavaScript cannot read it — but it is sent automatically on every request to this origin.<br><br>
+          ⚠ Vulnerability: this cookie never expires and is never rotated on use.
+        </div>
       </div>
       <div class="warn-box">
-        ⚠ Vulnerable: If an attacker captures this refresh token (e.g. from logs, MITM, XSS),
-        they can get new access tokens indefinitely — there is no way to invalidate the specific token
-        without clearing the entire store.
+        ⚠ If an attacker steals this cookie (e.g. via network sniffing or server-side log exposure),
+        they can get new access tokens indefinitely — the refresh token has no expiry and is never rotated.
       </div>
     </div>
 
@@ -203,22 +214,51 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="card" id="refresh-panel" style="display:none">
       <h2>4. Refresh Access Token</h2>
       <p style="font-size:0.85rem;color:#94a3b8;margin-bottom:0.75rem">
-        When access token expires (15 min), use the refresh token to get a new one.
-        On this server, the old refresh token stays valid forever.
+        When access token expires (15 min), call /api/refresh — the browser sends the httpOnly cookie automatically.
+        On this server, the same cookie stays valid forever.
       </p>
       <button class="btn" id="btn-refresh">POST /api/refresh</button>
       <pre class="response" id="refresh-output">–</pre>
     </div>
   </div>
   <script>
-  // DEMO ONLY: both tokens in memory so they are visible. Production: refresh → httpOnly cookie.
   var liveAccessToken = null;
-  var liveRefreshToken = null;
+
+  function showDashboard(accessToken) {
+    liveAccessToken = accessToken;
+    document.getElementById('access-token-display').textContent = accessToken;
+    document.getElementById('login-panel').style.display = 'none';
+    document.getElementById('token-status').style.display = '';
+    document.getElementById('api-panel').style.display = '';
+    document.getElementById('refresh-panel').style.display = '';
+    document.getElementById('btn-signout').style.display = '';
+  }
+
+  function showLogin() {
+    liveAccessToken = null;
+    document.getElementById('token-status').style.display = 'none';
+    document.getElementById('api-panel').style.display = 'none';
+    document.getElementById('refresh-panel').style.display = 'none';
+    document.getElementById('btn-signout').style.display = 'none';
+    document.getElementById('login-panel').style.display = '';
+  }
+
+  // On every page load: try to restore session silently using the httpOnly cookie
+  (async function restoreSession() {
+    try {
+      var res = await fetch('/api/refresh', { method: 'POST', credentials: 'include' });
+      if (res.ok) {
+        var data = await res.json();
+        showDashboard(data.accessToken);
+      }
+    } catch (e) {}
+  })();
 
   document.getElementById('btn-login').addEventListener('click', async function () {
     document.getElementById('err').textContent = '';
     var res = await fetch('/api/login', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: document.getElementById('username').value,
@@ -226,68 +266,42 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       })
     });
     var data = await res.json();
-    if (!res.ok) {
-      document.getElementById('err').textContent = data.error;
-      return;
-    }
-    liveAccessToken = data.accessToken;
-    liveRefreshToken = data.refreshToken;
-    document.getElementById('access-token-display').textContent = data.accessToken;
-    document.getElementById('refresh-token-display').textContent = data.refreshToken;
-    document.getElementById('login-panel').style.display = 'none';
-    document.getElementById('token-status').style.display = '';
-    document.getElementById('api-panel').style.display = '';
-    document.getElementById('refresh-panel').style.display = '';
-    document.getElementById('btn-signout').style.display = '';
+    if (!res.ok) { document.getElementById('err').textContent = data.error; return; }
+    showDashboard(data.accessToken);
   });
 
   function callApi(path, outId) {
-    fetch(path, { headers: { 'Authorization': 'Bearer ' + liveAccessToken } })
-      .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, status: res.status, data: d }; }); })
-      .then(function (r) {
-        document.getElementById(outId).textContent = JSON.stringify(r.data, null, 2);
-      });
+    fetch(path, {
+      credentials: 'include',
+      headers: { 'Authorization': 'Bearer ' + liveAccessToken }
+    })
+      .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, data: d }; }); })
+      .then(function (r) { document.getElementById(outId).textContent = JSON.stringify(r.data, null, 2); });
   }
 
   document.getElementById('btn-me').addEventListener('click', function () { callApi('/api/me', 'api-output'); });
   document.getElementById('btn-projects').addEventListener('click', function () { callApi('/api/projects', 'api-output'); });
 
   document.getElementById('btn-refresh').addEventListener('click', async function () {
-    var res = await fetch('/api/refresh', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: liveRefreshToken })
-    });
+    var res = await fetch('/api/refresh', { method: 'POST', credentials: 'include' });
     var data = await res.json();
     document.getElementById('refresh-output').textContent = JSON.stringify(data, null, 2);
     if (res.ok) {
       liveAccessToken = data.accessToken;
       document.getElementById('access-token-display').textContent = data.accessToken;
-      document.getElementById('refresh-token-display').textContent =
-        liveRefreshToken + '\\n\\n⚠ OLD refresh token still valid — no rotation';
     }
   });
 
   document.getElementById('btn-signout').addEventListener('click', async function () {
-    if (liveRefreshToken) {
-      await fetch('/api/logout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: liveRefreshToken })
-      }).catch(function () {});
-    }
-    liveAccessToken = null;
-    liveRefreshToken = null;
-    document.getElementById('token-status').style.display = 'none';
-    document.getElementById('api-panel').style.display = 'none';
-    document.getElementById('refresh-panel').style.display = 'none';
-    document.getElementById('btn-signout').style.display = 'none';
-    document.getElementById('login-panel').style.display = '';
+    await fetch('/api/logout', { method: 'POST', credentials: 'include' }).catch(function () {});
+    showLogin();
   });
   </script>
 </body>
 </html>`;
 
+// POST /api/login → sets ar_refresh httpOnly cookie + returns { accessToken }
+// ⚠️ VULNERABILITY: cookie never expires and is never rotated
 app.post('/api/login', function (req, res) {
   const { username, password } = req.body;
   const user = USERS.find(function (u) {
@@ -295,27 +309,30 @@ app.post('/api/login', function (req, res) {
   });
   if (!user) return res.status(401).json({ error: 'Invalid credentials' });
 
+  const refreshToken = issueRefreshToken(user);
+  res.setHeader('Set-Cookie', 'ar_refresh=' + refreshToken + '; HttpOnly; SameSite=Strict; Path=/');
   res.json({
     accessToken: issueAccessToken(user),
-    refreshToken: issueRefreshToken(user),
     tokenType: 'Bearer',
     expiresIn: '15m',
-    note: '⚠ Refresh token never expires and is never rotated — if stolen, attacker has permanent access',
+    note: '⚠ Refresh cookie never expires and is never rotated',
   });
 });
 
-// ⚠️ VULNERABILITY: issues new access token WITHOUT invalidating the old refresh token
+// POST /api/refresh — reads cookie, issues new access token, does NOT rotate cookie
+// ⚠️ VULNERABILITY: same cookie stays valid forever
 app.post('/api/refresh', function (req, res) {
-  const { refreshToken } = req.body;
+  const refreshToken = getRefreshCookie(req);
   const stored = refreshToken ? refreshTokenStore.get(refreshToken) : null;
-  if (!stored) return res.status(401).json({ error: 'Invalid refresh token' });
+  if (!stored) return res.status(401).json({ error: 'No valid refresh token' });
 
   const user = USERS.find(function (u) { return u.id === stored.userId; });
+  // ⚠️ VULNERABILITY: cookie NOT rotated — same token remains valid forever
   res.json({
     accessToken: issueAccessToken(user),
     tokenType: 'Bearer',
     expiresIn: '15m',
-    warning: '⚠ Old refresh token still valid — no rotation. Token count in store: ' + refreshTokenStore.size,
+    warning: '⚠ Refresh cookie not rotated. Store size: ' + refreshTokenStore.size,
   });
 });
 
@@ -349,15 +366,12 @@ app.get('/api/me', requireAccess, function (req, res) {
   });
 });
 
-// ⚠️ VULNERABILITY: only removes this one token; attacker's copy still works
+// POST /api/logout — reads cookie, deletes from store, clears cookie
 app.post('/api/logout', function (req, res) {
-  const { refreshToken } = req.body;
-  if (refreshToken && refreshTokenStore.has(refreshToken)) {
-    refreshTokenStore.delete(refreshToken);
-    res.json({ message: 'Logged out — this refresh token deleted', tokensRemaining: refreshTokenStore.size });
-  } else {
-    res.status(400).json({ error: 'Refresh token not found or already revoked' });
-  }
+  const refreshToken = getRefreshCookie(req);
+  if (refreshToken) refreshTokenStore.delete(refreshToken);
+  res.setHeader('Set-Cookie', 'ar_refresh=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+  res.json({ message: 'Logged out — refresh cookie cleared' });
 });
 
 app.get('/', function (req, res) {

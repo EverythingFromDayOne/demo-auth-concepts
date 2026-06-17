@@ -11,18 +11,33 @@ const cors = require('cors');
 const app = express();
 const PORT = 3063;
 
-app.use(cors({ origin: 'http://localhost:3062' }));
+app.use(cors({ origin: 'http://localhost:3062', credentials: true }));
 app.use(express.json());
 
-// ✅ PROTECTED: cryptographically strong secrets generated at startup
+function getRefreshCookie(req) {
+  const raw = req.headers.cookie || '';
+  const match = raw.match(/(?:^|;\s*)ar_refresh=([^;]+)/);
+  return match ? match[1] : null;
+}
+
+function setRefreshCookie(res, token) {
+  res.setHeader('Set-Cookie',
+    'ar_refresh=' + token + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + (7 * 24 * 60 * 60)
+  );
+}
+
+function clearRefreshCookie(res) {
+  res.setHeader('Set-Cookie', 'ar_refresh=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+}
+
+// ✅ PROTECTED: cryptographically strong secret generated at startup
 const ACCESS_SECRET = crypto.randomBytes(64).toString('hex');
-const REFRESH_SECRET = crypto.randomBytes(64).toString('hex');
 const ACCESS_EXPIRY = '15m';
 const REFRESH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-// token → { userId, username, familyId, version, issuedAt }
+// ✅ PROTECTED: each refresh token entry has a family ID — reuse revokes the whole family
 const refreshTokenStore = new Map();
-// In production: store revoked families in Redis with a TTL matching max refresh token lifetime
+// In production: store revoked families in Redis with a TTL matching the max refresh token lifetime
 const revokedFamilies = new Set();
 const rotatedTokens = new Map();
 
@@ -42,11 +57,10 @@ function issueAccessToken(user) {
 
 function issueRefreshToken(user) {
   const token = crypto.randomBytes(40).toString('hex');
-  const familyId = crypto.randomUUID();
   refreshTokenStore.set(token, {
     userId: user.id,
     username: user.username,
-    familyId: familyId,
+    familyId: crypto.randomUUID(),
     version: 1,
     issuedAt: Date.now(),
   });
@@ -171,7 +185,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="banner">
-    ✅ HARDENED: Refresh tokens rotate on every use, expire after 7 days, and are revoked on password change.
+    ✅ HARDENED: Refresh tokens rotate on every use, expire after 7 days, live in httpOnly cookie, and are revoked on password change.
   </div>
   <header class="topbar">
     <div>
@@ -182,7 +196,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </header>
   <div class="container">
     <div class="card" id="login-panel">
-      <h2>1. Login — Issue Access + Refresh Tokens</h2>
+      <h2>1. Login — httpOnly cookie + access token</h2>
       <label>Username</label>
       <input class="login-input" type="text" id="username" value="alice">
       <label>Password</label>
@@ -198,12 +212,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         <div class="token-box" id="access-token-display" style="color:#a78bfa"></div>
       </div>
       <div>
-        <label>REFRESH TOKEN (rotates on use, 7-day max age)</label>
-        <div class="token-box" id="refresh-token-display" style="color:#4ade80"></div>
+        <label>REFRESH TOKEN (httpOnly cookie — rotates on every use, 7-day max age)</label>
+        <div class="token-box" style="color:#4ade80;font-size:0.8rem">
+          Stored in <code style="color:#f87171">ar_refresh</code> httpOnly cookie.
+          JavaScript cannot read it — but it is sent automatically on every request to this origin.<br><br>
+          ✅ On each /api/refresh: old cookie cleared, new token issued in new cookie (rotation).
+          Reusing a rotated token triggers full family revocation.
+        </div>
       </div>
       <div class="ok-box">
-        ✅ Each /api/refresh call invalidates the old refresh token and issues a new one.
-        Reusing an old token triggers family revocation (reuse detection).
+        ✅ Even if the refresh cookie is stolen, the attacker gets at most one use before the token
+        rotates. Reuse detection then revokes the entire token family immediately.
       </div>
     </div>
 
@@ -216,19 +235,49 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     <div class="card" id="refresh-panel" style="display:none">
       <h2>4. Refresh + Security Actions</h2>
-      <button class="btn" id="btn-refresh">POST /api/refresh (rotates token)</button>
+      <button class="btn" id="btn-refresh">POST /api/refresh (rotates cookie)</button>
       <button class="btn danger" id="btn-change-pw">POST /api/change-password (revoke all sessions)</button>
       <pre class="response" id="refresh-output">–</pre>
     </div>
   </div>
   <script>
   var liveAccessToken = null;
-  var liveRefreshToken = null;
+
+  function showDashboard(accessToken) {
+    liveAccessToken = accessToken;
+    document.getElementById('access-token-display').textContent = accessToken;
+    document.getElementById('login-panel').style.display = 'none';
+    document.getElementById('token-status').style.display = '';
+    document.getElementById('api-panel').style.display = '';
+    document.getElementById('refresh-panel').style.display = '';
+    document.getElementById('btn-signout').style.display = '';
+  }
+
+  function showLogin() {
+    liveAccessToken = null;
+    document.getElementById('token-status').style.display = 'none';
+    document.getElementById('api-panel').style.display = 'none';
+    document.getElementById('refresh-panel').style.display = 'none';
+    document.getElementById('btn-signout').style.display = 'none';
+    document.getElementById('login-panel').style.display = '';
+  }
+
+  // On every page load: try to restore session silently using the httpOnly cookie
+  (async function restoreSession() {
+    try {
+      var res = await fetch('/api/refresh', { method: 'POST', credentials: 'include' });
+      if (res.ok) {
+        var data = await res.json();
+        showDashboard(data.accessToken);
+      }
+    } catch (e) {}
+  })();
 
   document.getElementById('btn-login').addEventListener('click', async function () {
     document.getElementById('err').textContent = '';
     var res = await fetch('/api/login', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: document.getElementById('username').value,
@@ -236,52 +285,38 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       })
     });
     var data = await res.json();
-    if (!res.ok) {
-      document.getElementById('err').textContent = data.error;
-      return;
-    }
-    liveAccessToken = data.accessToken;
-    liveRefreshToken = data.refreshToken;
-    document.getElementById('access-token-display').textContent = data.accessToken;
-    document.getElementById('refresh-token-display').textContent = data.refreshToken;
-    document.getElementById('login-panel').style.display = 'none';
-    document.getElementById('token-status').style.display = '';
-    document.getElementById('api-panel').style.display = '';
-    document.getElementById('refresh-panel').style.display = '';
-    document.getElementById('btn-signout').style.display = '';
+    if (!res.ok) { document.getElementById('err').textContent = data.error; return; }
+    showDashboard(data.accessToken);
   });
 
   function callApi(path, outId) {
-    fetch(path, { headers: { 'Authorization': 'Bearer ' + liveAccessToken } })
-      .then(function (res) { return res.json().then(function (d) { return { data: d }; }); })
-      .then(function (r) {
-        document.getElementById(outId).textContent = JSON.stringify(r.data, null, 2);
-      });
+    fetch(path, {
+      credentials: 'include',
+      headers: { 'Authorization': 'Bearer ' + liveAccessToken }
+    })
+      .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, data: d }; }); })
+      .then(function (r) { document.getElementById(outId).textContent = JSON.stringify(r.data, null, 2); });
   }
 
   document.getElementById('btn-me').addEventListener('click', function () { callApi('/api/me', 'api-output'); });
   document.getElementById('btn-projects').addEventListener('click', function () { callApi('/api/projects', 'api-output'); });
 
   document.getElementById('btn-refresh').addEventListener('click', async function () {
-    var res = await fetch('/api/refresh', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: liveRefreshToken })
-    });
+    var res = await fetch('/api/refresh', { method: 'POST', credentials: 'include' });
     var data = await res.json();
     document.getElementById('refresh-output').textContent = JSON.stringify(data, null, 2);
     if (res.ok) {
       liveAccessToken = data.accessToken;
-      liveRefreshToken = data.refreshToken;
       document.getElementById('access-token-display').textContent = data.accessToken;
-      document.getElementById('refresh-token-display').textContent =
-        data.refreshToken + '\\n\\n✅ Old refresh token invalidated (rotation applied)';
+    } else {
+      showLogin();
     }
   });
 
   document.getElementById('btn-change-pw').addEventListener('click', async function () {
     var res = await fetch('/api/change-password', {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + liveAccessToken
@@ -290,37 +325,18 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     });
     var data = await res.json();
     document.getElementById('refresh-output').textContent = JSON.stringify(data, null, 2);
-    if (res.ok) {
-      liveAccessToken = null;
-      liveRefreshToken = null;
-      document.getElementById('token-status').style.display = 'none';
-      document.getElementById('api-panel').style.display = 'none';
-      document.getElementById('refresh-panel').style.display = 'none';
-      document.getElementById('btn-signout').style.display = 'none';
-      document.getElementById('login-panel').style.display = '';
-    }
+    if (res.ok) showLogin();
   });
 
   document.getElementById('btn-signout').addEventListener('click', async function () {
-    if (liveRefreshToken) {
-      await fetch('/api/logout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: liveRefreshToken })
-      }).catch(function () {});
-    }
-    liveAccessToken = null;
-    liveRefreshToken = null;
-    document.getElementById('token-status').style.display = 'none';
-    document.getElementById('api-panel').style.display = 'none';
-    document.getElementById('refresh-panel').style.display = 'none';
-    document.getElementById('btn-signout').style.display = 'none';
-    document.getElementById('login-panel').style.display = '';
+    await fetch('/api/logout', { method: 'POST', credentials: 'include' }).catch(function () {});
+    showLogin();
   });
   </script>
 </body>
 </html>`;
 
+// POST /api/login — sets cookie, returns access token only
 app.post('/api/login', function (req, res) {
   const { username, password } = req.body;
   const user = USERS.find(function (u) {
@@ -328,45 +344,50 @@ app.post('/api/login', function (req, res) {
   });
   if (!user) return res.status(401).json({ error: 'Invalid credentials' });
 
+  const refreshToken = issueRefreshToken(user);
+  setRefreshCookie(res, refreshToken);
   res.json({
     accessToken: issueAccessToken(user),
-    refreshToken: issueRefreshToken(user),
     tokenType: 'Bearer',
     expiresIn: '15m',
-    note: '✅ Refresh token will rotate on each /api/refresh call',
+    note: '✅ Refresh token in httpOnly cookie. Rotates on every /api/refresh call.',
   });
 });
 
-// ✅ PROTECTED: rotation + reuse detection on every refresh
+// ✅ PROTECTED: rotation + reuse detection — old cookie cleared, new cookie set
 app.post('/api/refresh', function (req, res) {
-  const { refreshToken } = req.body;
+  const refreshToken = getRefreshCookie(req);
   const stored = refreshToken ? refreshTokenStore.get(refreshToken) : null;
 
   if (!stored) {
-    const familyId = rotatedTokens.get(refreshToken);
+    const familyId = refreshToken ? rotatedTokens.get(refreshToken) : null;
     if (familyId) {
       revokeFamily(familyId);
-      return res.status(401).json({ error: 'Refresh token reuse detected — please log in again' });
+      clearRefreshCookie(res);
+      return res.status(401).json({ error: 'Refresh token reuse detected — all sessions revoked' });
     }
-    return res.status(401).json({ error: 'Invalid or expired refresh token' });
+    return res.status(401).json({ error: 'No valid refresh token' });
   }
 
   if (revokedFamilies.has(stored.familyId)) {
-    return res.status(401).json({ error: 'Refresh token reuse detected — please log in again' });
+    clearRefreshCookie(res);
+    return res.status(401).json({ error: 'Session revoked — please log in again' });
   }
 
   if (Date.now() - stored.issuedAt > REFRESH_MAX_AGE_MS) {
     refreshTokenStore.delete(refreshToken);
+    clearRefreshCookie(res);
     return res.status(401).json({ error: 'Refresh token expired — please log in again' });
   }
 
   const user = USERS.find(function (u) { return u.id === stored.userId; });
 
+  // ✅ ROTATION: delete old, record as rotated, issue new token in new cookie
   refreshTokenStore.delete(refreshToken);
   rotatedTokens.set(refreshToken, stored.familyId);
 
-  const newRefreshToken = crypto.randomBytes(40).toString('hex');
-  refreshTokenStore.set(newRefreshToken, {
+  const newToken = crypto.randomBytes(40).toString('hex');
+  refreshTokenStore.set(newToken, {
     userId: user.id,
     username: user.username,
     familyId: stored.familyId,
@@ -374,12 +395,12 @@ app.post('/api/refresh', function (req, res) {
     issuedAt: stored.issuedAt,
   });
 
+  setRefreshCookie(res, newToken);
   res.json({
     accessToken: issueAccessToken(user),
-    refreshToken: newRefreshToken,
     tokenType: 'Bearer',
     expiresIn: '15m',
-    note: '✅ Old refresh token invalidated. New refresh token issued (rotation applied).',
+    note: '✅ Refresh cookie rotated — old token invalidated, new cookie set.',
   });
 });
 
@@ -413,28 +434,29 @@ app.get('/api/me', requireAccess, function (req, res) {
   });
 });
 
+// POST /api/logout — reads cookie, revokes, clears cookie
 app.post('/api/logout', function (req, res) {
-  const { refreshToken } = req.body;
+  const refreshToken = getRefreshCookie(req);
   if (refreshToken && refreshTokenStore.has(refreshToken)) {
     const stored = refreshTokenStore.get(refreshToken);
-    refreshTokenStore.delete(refreshToken);
     rotatedTokens.set(refreshToken, stored.familyId);
-    res.json({ message: 'Logged out — refresh token revoked', tokensRemaining: refreshTokenStore.size });
-  } else {
-    res.status(400).json({ error: 'Refresh token not found or already revoked' });
+    refreshTokenStore.delete(refreshToken);
   }
+  clearRefreshCookie(res);
+  res.json({ message: '✅ Logged out — refresh cookie cleared' });
 });
 
-// ✅ PROTECTED: revoke all refresh tokens for user on password change
+// ✅ PROTECTED: revoke all sessions on password change — clears cookie
 app.post('/api/change-password', requireAccess, function (req, res) {
   const userId = req.user.sub;
   for (const [token, data] of refreshTokenStore.entries()) {
     if (data.userId === userId) {
       rotatedTokens.set(token, data.familyId);
-      refreshTokenStore.delete(token);
       revokedFamilies.add(data.familyId);
+      refreshTokenStore.delete(token);
     }
   }
+  clearRefreshCookie(res);
   res.json({ message: '✅ Password changed. All sessions revoked — please log in again on all devices.' });
 });
 

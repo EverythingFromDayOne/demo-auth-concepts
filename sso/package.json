@@ -1,0 +1,15 @@
+{
+  "name": "sso-demo",
+  "version": "1.0.0",
+  "scripts": {
+    "vulnerable": "node sso-server.js",
+    "guide": "node guide-server.js",
+    "strong": "node sso-strong-server.js",
+    "start": "node sso-server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
