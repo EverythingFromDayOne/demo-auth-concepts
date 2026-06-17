@@ -74,9 +74,9 @@ const GUIDE_HTML = `<!DOCTYPE html>
       border-color: #334155;
     }
     .target-switcher .btn-protected {
-      background: #dc2626;
+      background: #16a34a;
       color: #fff;
-      border-color: #dc2626;
+      border-color: #16a34a;
     }
     .flow-box { max-width: 900px; }
     .decoded-box {

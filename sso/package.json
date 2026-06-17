@@ -4,7 +4,7 @@
   "scripts": {
     "vulnerable": "node sso-server.js",
     "guide": "node guide-server.js",
-    "strong": "node sso-strong-server.js",
+    "secure": "node sso-strong-server.js",
     "start": "node sso-server.js"
   },
   "dependencies": {

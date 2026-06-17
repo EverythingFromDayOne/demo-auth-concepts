@@ -4,7 +4,7 @@
   "scripts": {
     "vulnerable": "node flow-server.js",
     "guide": "node guide-server.js",
-    "strong": "node flow-strong-server.js",
+    "secure": "node flow-strong-server.js",
     "start": "node flow-server.js"
   },
   "dependencies": {

@@ -1,5 +1,5 @@
 /*
- * Terminal 3: cd auth-concepts/sso && npm run strong
+ * Terminal 3: cd auth-concepts/sso && npm run secure
  * WorkHub (SP) + CorpID (IdP) — redirect_uri allowlist + state validation (port 3066)
  */
 

@@ -1,5 +1,5 @@
 /*
- * Terminal 3: cd auth-concepts/access-refresh && npm run strong
+ * Terminal 3: cd auth-concepts/access-refresh && npm run secure
  * FlowAPI — refresh token rotation + revocation (port 3063)
  */
 

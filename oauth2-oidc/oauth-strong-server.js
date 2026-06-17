@@ -1,5 +1,5 @@
 /*
- * Terminal 3: cd auth-concepts/oauth2-oidc && npm run strong
+ * Terminal 3: cd auth-concepts/oauth2-oidc && npm run secure
  * ConnectApp + GrantID + GitBucket — state + PKCE (port 3069)
  */
 

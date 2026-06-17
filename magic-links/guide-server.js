@@ -147,14 +147,14 @@ const GUIDE_HTML = `<!DOCTYPE html>
       border-color: #fff;
     }
     .target-switcher .btn-protected {
-      background: #dc2626;
+      background: #16a34a;
       color: #fff;
-      border-color: #dc2626;
+      border-color: #16a34a;
     }
     .target-switcher .btn-protected.active {
-      background: #ef4444;
+      background: #15803d;
       color: #fff;
-      border-color: #ef4444;
+      border-color: #15803d;
     }
     .flow-box { max-width: 900px; }
     input.field {
@@ -386,7 +386,7 @@ Port 3078 uses this phrasing for all responses including rate-limited ones.</pre
   </div>
 
   <div class="target-switcher">
-    <button class="btn-vulnerable" id="btn-vuln">Weak Magic Links (3076)</button>
+    <button class="btn-vulnerable" id="btn-vuln">Vulnerable Magic Links (3076)</button>
     <button class="btn-protected" id="btn-secure">Hardened Magic Links (3078)</button>
   </div>
 

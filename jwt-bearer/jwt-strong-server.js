@@ -1,5 +1,5 @@
 /*
- * Terminal 3: cd auth-concepts/jwt-bearer && npm run strong
+ * Terminal 3: cd auth-concepts/jwt-bearer && npm run secure
  * AuthFlow — JWT with strong secret (port 3060)
  */
 

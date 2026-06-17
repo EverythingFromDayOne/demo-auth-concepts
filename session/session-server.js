@@ -1,5 +1,5 @@
 /*
- * Terminal 1: cd auth-concepts/session && npm install && npm run session
+ * Terminal 1: cd auth-concepts/session && npm install && npm run vulnerable
  * NoteKeep — session cookie without HttpOnly (port 3052)
  */
 

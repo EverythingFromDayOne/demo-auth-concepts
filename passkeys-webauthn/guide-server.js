@@ -18,7 +18,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; text-shadow: 0 0 8px rgba(0, 255,
 .target-switcher { position: fixed; bottom: 1rem; left: 1rem; display: flex; gap: 0.5rem; z-index: 9999; }
 .target-switcher button { padding: 0.4rem 0.85rem; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; border: 1px solid; }
 .target-switcher .btn-vulnerable { background: #1e293b; color: #fff; border-color: #334155; }
-.target-switcher .btn-protected { background: #dc2626; color: #fff; border-color: #dc2626; }
+.target-switcher .btn-protected { background: #16a34a; color: #fff; border-color: #16a34a; }
 .flow-box { max-width: 900px; }
 input.field { background: #111; border: 1px solid #1a3a1a; color: #00ff41; font-family: 'Courier New', Courier, monospace; font-size: 0.82rem; padding: 0.4rem 0.6rem; border-radius: 4px; }
 .result-banner { padding: 0.6rem 1rem; border-radius: 4px; font-size: 0.82rem; margin-top: 0.75rem; display: none; }
@@ -87,7 +87,7 @@ Hardened server persists newCounter after each successful authentication.</pre><
 </table></div>
 
 <div class="target-switcher">
-  <button class="btn-vulnerable" id="btn-vuln">Weak WebAuthn (3073)</button>
+  <button class="btn-vulnerable" id="btn-vuln">Vulnerable WebAuthn (3073)</button>
   <button class="btn-protected" id="btn-secure">Hardened WebAuthn (3075)</button>
 </div>
 

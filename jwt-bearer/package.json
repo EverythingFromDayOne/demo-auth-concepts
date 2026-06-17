@@ -2,9 +2,9 @@
   "name": "jwt-bearer-demo",
   "version": "1.0.0",
   "scripts": {
-    "weak": "node jwt-server.js",
+    "vulnerable": "node jwt-server.js",
     "guide": "node guide-server.js",
-    "strong": "node jwt-strong-server.js",
+    "secure": "node jwt-strong-server.js",
     "start": "node jwt-server.js"
   },
   "dependencies": {

@@ -4,7 +4,7 @@
   "scripts": {
     "vulnerable": "node oauth-server.js",
     "guide": "node guide-server.js",
-    "strong": "node oauth-strong-server.js",
+    "secure": "node oauth-strong-server.js",
     "start": "node oauth-server.js"
   },
   "dependencies": {

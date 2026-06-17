@@ -2,9 +2,9 @@
   "name": "session-auth-demo",
   "version": "1.0.0",
   "scripts": {
-    "session": "node session-server.js",
+    "vulnerable": "node session-server.js",
     "guide": "node guide-server.js",
-    "hardened": "node session-hardened-server.js",
+    "secure": "node session-hardened-server.js",
     "start": "node session-server.js"
   },
   "dependencies": {

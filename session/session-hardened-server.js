@@ -1,5 +1,5 @@
 /*
- * Terminal 3: cd auth-concepts/session && npm run hardened
+ * Terminal 3: cd auth-concepts/session && npm run secure
  * NoteKeep — HttpOnly + SameSite=Strict session cookie (port 3054)
  */
 

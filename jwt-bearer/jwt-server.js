@@ -1,5 +1,5 @@
 /*
- * Terminal 1: cd auth-concepts/jwt-bearer && npm install && npm run weak
+ * Terminal 1: cd auth-concepts/jwt-bearer && npm install && npm run vulnerable
  * AuthFlow — JWT with weak secret (port 3058)
  */
 

@@ -147,14 +147,14 @@ const GUIDE_HTML = `<!DOCTYPE html>
       border-color: #fff;
     }
     .target-switcher .btn-protected {
-      background: #dc2626;
+      background: #16a34a;
       color: #fff;
-      border-color: #dc2626;
+      border-color: #16a34a;
     }
     .target-switcher .btn-protected.active {
-      background: #ef4444;
+      background: #15803d;
       color: #fff;
-      border-color: #ef4444;
+      border-color: #15803d;
     }
     .flow-box { max-width: 900px; }
     textarea.token-input {
@@ -369,8 +369,8 @@ Bearer = "I bear (possess) this token, grant me access."</pre>
   </div>
 
   <div class="target-switcher">
-    <button type="button" class="btn-vulnerable" id="btn-weak">Weak JWT (3058)</button>
-    <button type="button" class="btn-protected" id="btn-strong">Strong JWT (3060)</button>
+    <button type="button" class="btn-vulnerable" id="btn-weak">Vulnerable JWT (3058)</button>
+    <button type="button" class="btn-protected" id="btn-strong">Hardened JWT (3060)</button>
   </div>
 
   <script>
