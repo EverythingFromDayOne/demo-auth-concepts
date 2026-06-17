@@ -1,0 +1,15 @@
+{
+  "name": "oauth2-oidc-demo",
+  "version": "1.0.0",
+  "scripts": {
+    "vulnerable": "node oauth-server.js",
+    "guide": "node guide-server.js",
+    "strong": "node oauth-strong-server.js",
+    "start": "node oauth-server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
