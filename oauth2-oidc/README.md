@@ -1,56 +1,154 @@
-# OAuth2 & OIDC — ConnectApp Demo
+# OAuth2 & OIDC — ConnectApp
 
-ConnectApp is a third-party todo app that connects to GitBucket via GrantID (OAuth2 + OIDC authorization server).
+ConnectApp is a third-party todo app that connects to GitBucket via GrantID (OAuth2 + OIDC authorization server). This demo shows the authorization code flow, OIDC identity claims, and the defenses (state + PKCE) that protect it.
 
-## Authorization code flow
+---
+
+## Port Reference
+
+| Port | File | Role |
+|------|------|------|
+| 3067 | `oauth-server.js` | Vulnerable — no state, no PKCE |
+| 3068 | `guide-server.js` | Concept guide |
+| 3069 | `oauth-strong-server.js` | Hardened — state + PKCE |
+
+---
+
+## How It Works
 
 ```
-1. User clicks "Connect with GitBucket" on ConnectApp
-2. ConnectApp redirects to GrantID /auth/authorize (with state + PKCE on hardened server)
+1. ConnectApp generates:
+     state        = crypto.randomBytes(16).toString('hex')   [hardened only]
+     code_verifier = crypto.randomBytes(32).toString('base64url')  [hardened only]
+     code_challenge = SHA256(code_verifier)  [hardened only]
+
+2. ConnectApp redirects to GrantID /auth/authorize:
+     ?client_id=connectapp-client-id
+     &redirect_uri=http://localhost:3069/callback
+     &scope=openid profile email
+     &state=<state>                    [hardened only]
+     &code_challenge=<challenge>       [hardened only]
+     &code_challenge_method=S256       [hardened only]
+
 3. User logs in at GrantID and approves scopes
-4. GrantID redirects to ConnectApp /callback?code=...&state=...
-5. ConnectApp verifies state, exchanges code (+ code_verifier) for tokens
-6. ConnectApp uses access_token to call GitBucket API
-7. id_token proves who the user is (OIDC)
+
+4. GrantID redirects to ConnectApp:
+     /callback?code=<auth_code>&state=<state>
+
+5. ConnectApp verifies state [hardened only], exchanges code:
+     POST /auth/token { code, client_id, client_secret, code_verifier }
+                                                           [hardened only]
+
+6. GrantID validates code + PKCE → returns { access_token, id_token }
+
+7. ConnectApp calls GitBucket API with access_token
+   Decodes id_token to get user identity (OIDC)
 ```
 
-## Vulnerability (port 3067)
+---
 
-No `state` parameter. CSRF attack: trick victim into loading `/callback?code=ATTACKER_CODE` — victim's ConnectApp account links to attacker's GitBucket identity.
+## The Vulnerability
 
-## Fix (port 3069)
+Port 3067 is missing two independent defenses.
 
-`state` is cryptographically random and verified in callback. PKCE: `code_challenge` sent with authorize, `code_verifier` sent with token exchange.
+**Attack 1 — CSRF (no state):**
 
-## Run the demo
+```
+1. Attacker initiates OAuth flow with their own GrantID account → gets auth code
+2. Attacker stops before /callback — does NOT exchange the code
+3. Attacker tricks victim into loading: /callback?code=ATTACKER_CODE
+4. Victim's ConnectApp (no state check) exchanges the code → gets tokens for ATTACKER's account
+5. Victim's ConnectApp session is now linked to the attacker's GitBucket identity
+6. Attacker logs into ConnectApp normally → shares victim's ConnectApp session data
+```
+
+**Attack 2 — Code interception (no PKCE):**
+
+```
+1. Auth code appears in the redirect URL: /callback?code=abc123
+2. Code logged by reverse proxies, visible in browser history, leakable via Referer header
+3. Attacker captures the code and races to POST /auth/token { code: "abc123" }
+4. No code_verifier check → tokens issued to attacker
+```
+
+---
+
+## The Fix
+
+On port 3069, `state` is cryptographically random, stored server-side, and verified in the callback — binding the authorize request to the returning user. PKCE adds a `code_challenge` to the authorize request and requires the matching `code_verifier` at token exchange — so intercepting the auth code alone is insufficient.
+
+---
+
+## How to Run
 
 ```bash
 cd auth-concepts/oauth2-oidc
 npm install
 npm run vulnerable  # terminal 1 → localhost:3067
 npm run guide       # terminal 2 → localhost:3068
-npm run strong      # terminal 3 → localhost:3069
+npm run secure      # terminal 3 → localhost:3069
 ```
 
-## Walkthrough
+---
 
-1. Open **localhost:3068** — read flow diagrams, try PKCE generator and id_token decoder.
-2. Open **localhost:3067** — click **Connect with GitBucket**, login as `alice@example.com` / `pass1234`, approve scopes.
-3. Dashboard shows GitBucket repos, access token preview, and decoded OIDC claims.
-4. Open **localhost:3069** — same flow; notice `state` and PKCE in the authorize URL.
-5. Try loading `/callback?code=fake&state=wrong` on **3069** — rejected as CSRF.
+## Demo Walkthrough
 
-## Demo credentials
+1. Open **localhost:3068** — read flow diagrams, try the PKCE generator and id_token decoder
+2. Open **localhost:3067** — click **Connect with GitBucket**, login as `alice@example.com` / `pass1234`, approve scopes
+3. Dashboard shows GitBucket repos, access token preview, and decoded OIDC claims
+4. Note the authorize URL has no `state` or `code_challenge` — any forged `/callback?code=...` would be accepted
+
+---
+
+## Hardened Demo
+
+1. Open **localhost:3069** — open DevTools Network tab, click **Connect with GitBucket**
+2. Observe the authorize URL: contains `state=...` and `code_challenge=...`
+3. After login, observe `/callback?code=...&state=...`
+4. Try `/callback?code=fake&state=wrong` — state mismatch error
+5. Try exchanging a valid auth code without `code_verifier` (use curl/fetch directly) — rejected
+
+---
+
+## Vulnerable Lines
+
+```js
+// In GET /callback (vulnerable server):
+// ⚠️ VULNERABLE — state not generated, not stored, not validated on return
+// Any request to /callback with a valid code is accepted, regardless of origin
+const code = req.query.code;
+// req.query.state is ignored entirely
+
+// In POST /auth/token (vulnerable server):
+// ⚠️ VULNERABLE — no code_challenge/code_verifier check
+// Any party that has the auth code can exchange it for tokens
+const stored = authCodes.get(code);
+if (!stored) return res.status(400).json({ error: 'invalid_grant' });
+authCodes.delete(code);
+// code_verifier never checked
+```
+
+---
+
+## Defense Details
+
+### State parameter (CSRF protection)
+
+Cryptographic binding between the authorize request and the callback. State is generated by the client, stored in session, and compared on callback. A forged callback — such as one carrying an attacker's auth code — will have a mismatched or missing state and is rejected.
+
+### PKCE (code interception protection)
+
+`code_verifier` is a random secret held only by the legitimate client. The challenge (SHA256 of verifier) is sent with the authorize request. Any party that intercepts the auth code still cannot exchange it without the verifier.
+
+### Why both are needed
+
+State protects who initiates the flow; PKCE protects who exchanges the code. They are independent defenses against different attack vectors — neither alone covers the other's threat model.
+
+---
+
+## Credentials
 
 | Email | Password |
 |-------|----------|
 | alice@example.com | pass1234 |
 | bob@example.com | qwerty123 |
-
-## Ports
-
-| Port | Server | Role |
-|------|--------|------|
-| 3067 | `oauth-server.js` | Vulnerable — no state |
-| 3068 | `guide-server.js` | OAuth2 & OIDC Lab |
-| 3069 | `oauth-strong-server.js` | Hardened — state + PKCE |
