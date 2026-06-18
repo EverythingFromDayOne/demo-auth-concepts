@@ -25,10 +25,12 @@ const USERS = [
 const pendingSessions = new Map();
 const completedSessions = new Map();
 
-// ✅ PROTECTED: failure lockout
+// ✅ PROTECTED — failure lockout after 5 consecutive bad TOTP attempts.
+// 5-minute lockout per username; brute-forcing 1M codes at 5 attempts per 5 minutes ≈ 694 days.
 const failedAttempts = new Map();
 
-// ✅ PROTECTED: replay prevention
+// ✅ PROTECTED — replay prevention via usedCodes Set keyed by username:timeStep.
+// Each accepted OTP recorded; resubmitting the same code within the window is rejected (single-use).
 const usedCodes = new Map();
 setInterval(() => {
   const cutoff = Math.floor(Date.now() / 30000) - 4;
@@ -38,7 +40,9 @@ setInterval(() => {
   }
 }, 2 * 60 * 1000);
 
-// ✅ PROTECTED: single-use backup codes
+// ✅ PROTECTED — single-use backup codes stored as Set; deleted on use.
+// Generated at setup as one-time alternatives when authenticator device is lost; does not weaken
+// primary TOTP security because each code works exactly once and count is limited.
 const BACKUP_CODES = {
   alice: ['VAULT-A1B2', 'VAULT-C3D4', 'VAULT-E5F6', 'VAULT-G7H8', 'VAULT-I9J0', 'VAULT-K1L2', 'VAULT-M3N4', 'VAULT-O5P6'],
   admin: ['VAULT-Q7R8', 'VAULT-S9T0', 'VAULT-U1V2', 'VAULT-W3X4', 'VAULT-Y5Z6', 'VAULT-AA11', 'VAULT-BB22', 'VAULT-CC33'],
@@ -109,6 +113,7 @@ app.post('/api/verify-totp', (req, res) => {
     secret: user.totpSecret,
     encoding: 'base32',
     token: String(code || ''),
+    // window:1 — only codes within ±30 seconds accepted (2 valid codes max vs 20 on vulnerable server).
     window: 1,
   });
 

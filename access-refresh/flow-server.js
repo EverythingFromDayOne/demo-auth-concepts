@@ -23,13 +23,20 @@ function getRefreshCookie(req) {
   return match ? match[1] : null;
 }
 
-// ⚠️ VULNERABILITY: weak secret, no rotation, refresh tokens never expire
+// ⚠️ VULNERABLE — weak signing secret ('access-secret-weak'); same brute-force risk as jwt-bearer.
+// No refresh token rotation: each /api/refresh issues a new access token but keeps the old
+// refresh token valid. If stolen, an attacker can silently refresh indefinitely — legitimate user
+// and attacker both have valid sessions with no signal of compromise. No refresh token expiry:
+// a stolen refresh token grants permanent access unless the user logs out or the secret rotates.
+// No token family tracking — token theft is invisible; two parties can use the same refresh token.
 const ACCESS_SECRET = 'access-secret-weak';
 const ACCESS_EXPIRY = '15m';
 // REFRESH_SECRET unused — refresh tokens are opaque bytes stored in Map (see prompt note #2)
 const REFRESH_SECRET = 'refresh-secret-weak';
 
-// ⚠️ VULNERABILITY: stored forever, never rotated
+// ⚠️ VULNERABLE — refresh tokens stored forever in Map, never rotated or expired.
+// Each login adds a permanent entry; stolen cookie from browser backup or XSS exfiltration
+// grants indefinite access until explicit POST /api/logout — no automatic expiry or rotation signal.
 const refreshTokenStore = new Map();
 
 const USERS = [
@@ -48,7 +55,8 @@ function issueAccessToken(user) {
 
 function issueRefreshToken(user) {
   const token = crypto.randomBytes(40).toString('hex');
-  // ⚠️ VULNERABILITY: stored forever, never rotated
+  // ⚠️ VULNERABLE — refresh token stored forever with no expiry or rotation metadata.
+  // refreshTokenStore entry lacks expiresAt and familyId — cannot detect reuse or bound lifetime.
   refreshTokenStore.set(token, {
     userId: user.id,
     username: user.username,
@@ -62,7 +70,8 @@ app.get('/api/config', function (_req, res) {
 });
 
 // POST /api/login → sets ar_refresh httpOnly cookie + returns { accessToken }
-// ⚠️ VULNERABILITY: cookie never expires and is never rotated
+// ⚠️ VULNERABLE — refresh cookie has no Max-Age; token never expires and is never rotated.
+// Attacker who steals the cookie from a compromised browser retains access indefinitely.
 app.post('/api/login', function (req, res) {
   const { username, password } = req.body;
   const user = USERS.find(function (u) {
@@ -81,14 +90,16 @@ app.post('/api/login', function (req, res) {
 });
 
 // POST /api/refresh — reads cookie, issues new access token, does NOT rotate cookie
-// ⚠️ VULNERABILITY: same cookie stays valid forever
+// ⚠️ VULNERABLE — same refresh cookie stays valid forever after every refresh call.
+// Stolen refresh token can be replayed from any machine until explicit logout.
 app.post('/api/refresh', function (req, res) {
   const refreshToken = getRefreshCookie(req);
   const stored = refreshToken ? refreshTokenStore.get(refreshToken) : null;
   if (!stored) return res.status(401).json({ error: 'No valid refresh token' });
 
   const user = USERS.find(function (u) { return u.id === stored.userId; });
-  // ⚠️ VULNERABILITY: cookie NOT rotated — same token remains valid forever
+  // ⚠️ VULNERABLE — cookie NOT rotated; same refresh token remains valid after issuing new access token.
+  // Attacker and victim share the same refresh cookie value; both can call /api/refresh indefinitely.
   res.json({
     accessToken: issueAccessToken(user),
     tokenType: 'Bearer',

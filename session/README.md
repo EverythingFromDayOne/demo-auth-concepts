@@ -36,9 +36,9 @@ POST /api/logout → sessions.delete("a3f9b2c1...") → token invalidated
 ```bash
 cd auth-concepts/session
 npm install
-npm run session   # terminal 1 → localhost:3052
-npm run guide     # terminal 2 → localhost:3053
-npm run hardened  # terminal 3 → localhost:3054
+npm run vulnerable  # terminal 1 → localhost:3052
+npm run guide       # terminal 2 → localhost:3053
+npm run secure      # terminal 3 → localhost:3054
 ```
 
 ## Walkthrough

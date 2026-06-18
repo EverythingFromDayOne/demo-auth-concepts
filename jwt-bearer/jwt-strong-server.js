@@ -16,11 +16,18 @@ app.use(cors({ origin: 'http://localhost:3059' }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ✅ PROTECTED: 64 random bytes = 512-bit key — not brute-forceable
+// ✅ PROTECTED — 512-bit random key generated fresh at each server start.
+// crypto.randomBytes(64) draws from the OS CSPRNG, producing 2^512 possible keys.
+// Brute-forcing at 1 billion attempts/second would take longer than the age of the universe.
+// In production, load this from a JWT_SECRET environment variable so the same key persists
+// across restarts without being hardcoded in source.
 const JWT_SECRET = crypto.randomBytes(64).toString('hex');
 // Generated once at startup. In production: load from environment variable.
 console.log('[JWT] Secret generated (64 bytes). In production: store in JWT_SECRET env var.');
-// ✅ PROTECTED: short expiry limits window if token is stolen
+// ✅ PROTECTED — 15-minute expiry limits the damage window for a stolen token.
+// Even if a token leaks, it becomes useless in at most 15 minutes. Pair with refresh token
+// rotation (see access-refresh concept) so legitimate users get seamless re-authentication
+// without re-entering credentials.
 const JWT_EXPIRES_IN = '15m';
 
 const USERS = [

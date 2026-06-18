@@ -20,10 +20,12 @@ const sessions = new Map();
 const idpSessions = new Map();
 const pendingStates = new Set();
 
-// ✅ PROTECTED: cryptographically strong IdP signing secret
+// ✅ PROTECTED — cryptographically strong IdP signing secret (512-bit CSPRNG).
+// Assertion JWTs cannot be forged offline; attacker must compromise the server or steal a live token.
 const IDP_SECRET = crypto.randomBytes(64).toString('hex');
 
-// ✅ PROTECTED: explicit allowlist — exact match only
+// ✅ PROTECTED — explicit redirect_uri allowlist with exact string match only.
+// No prefix matching, no wildcards. Unknown URI → 400 before login form is shown or credentials entered.
 const ALLOWED_REDIRECT_URIS = {
   'workhub-client-id': [
     'http://localhost:3066/callback',
@@ -232,7 +234,8 @@ app.get('/idp/login', function (req, res) {
   const state = req.query.state || '';
   const allowed = ALLOWED_REDIRECT_URIS[clientId] || [];
 
-  // ✅ PROTECTED: reject unknown redirect_uri before showing login form
+  // ✅ PROTECTED — reject unknown redirect_uri before showing login form or accepting credentials.
+  // Checked at GET /idp/login: attacker cannot phish victims into authenticating to attacker.com.
   if (!allowed.includes(redirectUri)) {
     console.log('[IdP] SECURITY: rejected redirect_uri ' + redirectUri + ' for ' + clientId);
     return res.status(400).send(
@@ -262,7 +265,8 @@ app.post('/idp/authenticate', function (req, res) {
   const state = req.body.state || '';
   const allowed = ALLOWED_REDIRECT_URIS[clientId] || [];
 
-  // ✅ PROTECTED: exact allowlist match on POST as well
+  // ✅ PROTECTED — exact allowlist match on POST /idp/authenticate as well.
+  // Prevents bypass: attacker cannot submit a valid URI on GET then swap redirect_uri in POST body.
   if (!isRedirectAllowed(clientId, redirectUri)) {
     console.log('[IdP] SECURITY: rejected authenticate redirect_uri ' + redirectUri);
     return res.status(400).json({ error: 'redirect_uri not in allowlist', provided: redirectUri });
@@ -307,7 +311,9 @@ app.get('/', function (req, res) {
   if (getWhSession(req)) return res.redirect('/dashboard');
 
   const state = crypto.randomBytes(16).toString('hex');
-  // ✅ PROTECTED: state stored server-side and verified on callback (CSRF preview)
+  // ✅ PROTECTED — state stored server-side in pendingStates and verified on callback.
+  // SP generates crypto.randomBytes(16) before redirect; callback rejects mismatched or missing state.
+  // Prevents CSRF: attacker cannot trick victim into completing login with attacker's assertion.
   pendingStates.add(state);
 
   const loggedOut = req.query.logged_out === '1' ? '&logged_out=1' : '';
@@ -320,7 +326,8 @@ app.get('/callback', function (req, res) {
   const token = req.query.token;
   const state = req.query.state;
 
-  // ✅ PROTECTED: verify state matches what SP issued
+  // ✅ PROTECTED — verify state matches what SP issued before accepting assertion token.
+  // pendingStates.delete(state) ensures single-use; replay of callback URL fails on second attempt.
   if (!state || !pendingStates.has(state)) {
     return res.status(400).send('Invalid or missing state parameter — possible CSRF attempt');
   }

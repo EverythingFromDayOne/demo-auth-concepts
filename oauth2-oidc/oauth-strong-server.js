@@ -18,7 +18,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ✅ PROTECTED: strong auth server secret
+// ✅ PROTECTED — strong auth server secret (512-bit CSPRNG) for signing id_tokens.
+// Cannot be brute-forced from captured tokens; load from environment in production.
 const AUTH_SECRET = crypto.randomBytes(64).toString('hex');
 
 const CLIENTS = {
@@ -118,7 +119,8 @@ app.get('/auth/authorize', function (req, res) {
   if (!client.redirectUris.includes(redirectUri)) return res.status(400).send('redirect_uri not registered');
   if (responseType !== 'code') return res.status(400).send('Only response_type=code supported');
 
-  // ✅ PROTECTED: state required for hardened flow
+  // ✅ PROTECTED — state parameter required for hardened OAuth flow.
+  // Requests without state are rejected before consent page renders — blocks drive-by authorize attacks.
   if (!state) return res.status(400).send('state parameter required');
 
   // SSR required: OAuth params injected into hidden form fields
@@ -193,7 +195,9 @@ app.post('/auth/token', function (req, res) {
     return res.status(400).json({ error: 'invalid_grant' });
   }
 
-  // ✅ PROTECTED: PKCE verification
+  // ✅ PROTECTED — PKCE verification at token exchange.
+  // Server re-derives SHA256(code_verifier) and compares to stored code_challenge.
+  // Intercepted auth code is useless without the verifier that only the legitimate client holds.
   if (authCode.codeChallenge) {
     if (!codeVerifier) {
       return res.status(400).json({ error: 'invalid_grant', detail: 'code_verifier required' });
@@ -266,7 +270,9 @@ app.get('/', function (req, res) {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ✅ PROTECTED: generate state + PKCE challenge
+// ✅ PROTECTED — /connect generates state + PKCE code_challenge before redirect.
+// state stored in pendingFlows; code_verifier kept client-side until /callback token exchange.
+// code_challenge = SHA256(verifier) sent to authorize endpoint; binds code to this browser session.
 app.get('/connect', function (req, res) {
   const state = crypto.randomBytes(16).toString('hex');
   const codeVerifier = crypto.randomBytes(32).toString('base64url');
@@ -291,7 +297,8 @@ app.get('/callback', async function (req, res) {
   const state = req.query.state;
   const pending = pendingFlows.get(state);
 
-  // ✅ PROTECTED: verify state
+  // ✅ PROTECTED — verify state matches pendingFlows entry before code exchange.
+  // Mismatched or replayed callback rejected; pendingFlows.delete(state) ensures single use.
   if (!pending) {
     return res.status(400).send(
       'Invalid or missing state parameter — possible CSRF attack. <a href="/">Start over</a>'

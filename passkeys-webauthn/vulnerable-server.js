@@ -71,7 +71,8 @@ app.get('/api/register/begin', requireAuth, async (req, res) => {
   const options = await generateRegistrationOptions({
     rpName: 'CloudPortal',
     rpID: 'localhost',
-    // ⚠️ VULNERABILITY: userID embeds username (PII leakage risk)
+    // ⚠️ VULNERABLE — userID embeds username directly (PII leakage in WebAuthn credential).
+    // Discoverable credentials may expose username to any site that triggers the authenticator.
     userID: Buffer.from(username),
     userName: username,
     userDisplayName: fullName,
@@ -79,14 +80,18 @@ app.get('/api/register/begin', requireAuth, async (req, res) => {
     authenticatorSelection: {
       authenticatorAttachment: 'platform',
       residentKey: 'preferred',
-      // ⚠️ VULNERABILITY: UV discouraged
+      // ⚠️ VULNERABLE — userVerification discouraged; no PIN/biometric required.
+      // Physical access to unlocked device is sufficient to register and use a passkey.
       userVerification: 'discouraged',
     },
     timeout: 60000,
-    // ⚠️ VULNERABILITY: no excludeCredentials
+    // ⚠️ VULNERABLE — no excludeCredentials; user can register duplicate credentials.
+    // Without excludeCredentials, the authenticator may create multiple credentials for the same user.
+    // Attacker with session access can register additional passkeys and retain access after password change.
   });
 
-  // ⚠️ VULNERABILITY: challenge does not expire
+  // ⚠️ VULNERABLE — challenge does not expire; stored indefinitely in registrationChallenges Map.
+  // Replay: same challenge can authenticate multiple registration attempts.
   registrationChallenges.set(username, { challenge: options.challenge });
   res.json(options);
 });
@@ -103,7 +108,7 @@ app.post('/api/register/complete', requireAuth, async (req, res) => {
       expectedChallenge: stored.challenge,
       expectedOrigin: 'http://localhost:3073',
       expectedRPID: 'localhost',
-      // ⚠️ VULNERABILITY: allows non-verified user
+      // ⚠️ VULNERABLE — requireUserVerification:false allows registration without PIN/biometric.
       requireUserVerification: false,
     });
   } catch (e) {
@@ -111,7 +116,7 @@ app.post('/api/register/complete', requireAuth, async (req, res) => {
   }
   if (!verification.verified) return res.status(400).json({ error: 'Registration verification failed' });
 
-  // ⚠️ VULNERABILITY: challenge not deleted after use
+  // ⚠️ VULNERABLE — challenge not deleted after successful registration; can be replayed.
   const { credentialID, credentialPublicKey, counter } = verification.registrationInfo;
   credentialStore.set(username, {
     credentialID,
@@ -125,12 +130,12 @@ app.post('/api/register/complete', requireAuth, async (req, res) => {
 app.post('/api/auth/begin', async (_req, res) => {
   const options = await generateAuthenticationOptions({
     rpID: 'localhost',
-    // ⚠️ VULNERABILITY: UV discouraged
+    // ⚠️ VULNERABLE — userVerification discouraged on authentication; device presence only.
     userVerification: 'discouraged',
     timeout: 60000,
   });
 
-  // ⚠️ VULNERABILITY: one global challenge slot and reused
+  // ⚠️ VULNERABLE — one global 'auth' challenge slot shared by all users; never expires or rotates.
   authChallenges.set('auth', { challenge: options.challenge });
   res.json(options);
 });
@@ -163,7 +168,7 @@ app.post('/api/auth/complete', async (req, res) => {
         counter: cred.counter,
         transports: cred.transports,
       },
-      // ⚠️ VULNERABILITY: no mandatory UV
+      // ⚠️ VULNERABLE — requireUserVerification:false; stolen device can authenticate without biometric.
       requireUserVerification: false,
     });
   } catch (e) {
@@ -171,8 +176,8 @@ app.post('/api/auth/complete', async (req, res) => {
   }
   if (!verification.verified) return res.status(400).json({ error: 'Authentication failed' });
 
-  // ⚠️ VULNERABILITY: counter NOT updated
-  // ⚠️ VULNERABILITY: challenge NOT deleted
+  // ⚠️ VULNERABLE — authenticator counter NOT updated; cloned credentials undetectable.
+  // ⚠️ VULNERABLE — challenge NOT deleted; captured signed response can be replayed while challenge exists.
   const user = USERS.find((u) => u.username === foundUsername);
   const token = crypto.randomBytes(32).toString('hex');
   sessions.set(token, { username: user.username, fullName: user.fullName, role: user.role });
@@ -183,7 +188,7 @@ app.get('/api/debug/credential', (req, res) => {
   const { username } = req.query;
   const cred = credentialStore.get(username);
   if (!cred) return res.status(404).json({ error: 'No passkey registered for this user' });
-  // ⚠️ VULNERABILITY: exposes stable credential identifier
+  // ⚠️ VULNERABLE — debug endpoint exposes stable credentialID for targeted phishing/tracking.
   res.json({
     username,
     credentialID: Buffer.from(cred.credentialID).toString('base64url'),

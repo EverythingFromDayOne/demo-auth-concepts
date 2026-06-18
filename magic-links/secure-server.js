@@ -43,7 +43,8 @@ function getProfile(email) {
 
 const sessions = new Map();
 
-// ✅ PROTECTED: expiresAt enforced, single-use via delete on verify
+// ✅ PROTECTED — magic tokens carry expiresAt; single-use enforced via delete on verify.
+// setInterval purges expired entries every 10 minutes so Map does not grow without bound.
 const magicTokens = new Map();
 
 setInterval(function () {
@@ -76,7 +77,8 @@ function isRateLimited(email) {
   return false;
 }
 
-// ✅ PROTECTED: crypto.randomBytes(32) — 256 bits of CSPRNG entropy
+// ✅ PROTECTED — crypto.randomBytes(32) produces 256 bits of CSPRNG entropy.
+// Token space is 2^256 — computationally infeasible to brute-force or predict from observations.
 function generateToken() {
   return crypto.randomBytes(32).toString('hex');
 }
@@ -98,7 +100,7 @@ app.post('/api/auth/send-link', function (req, res) {
     return res.status(400).json({ error: 'Valid email address required' });
   }
 
-  // ✅ PROTECTED: rate limited — same response when blocked (no enumeration)
+  // ✅ PROTECTED — rate limited to 3 requests per email per hour; same response when blocked (no enumeration).
   if (isRateLimited(email)) {
     return res.json({ message: 'If that email is registered, a link has been sent.' });
   }
@@ -128,13 +130,14 @@ app.get('/auth/verify', function (req, res) {
     return res.redirect('/?error=invalid_token');
   }
 
-  // ✅ PROTECTED: reject expired tokens
+  // ✅ PROTECTED — reject tokens past expiresAt (15 minutes from issuance).
   if (Date.now() > stored.expiresAt) {
     magicTokens.delete(token);
     return res.redirect('/?error=link_expired');
   }
 
-  // ✅ PROTECTED: delete token before creating session (single-use)
+  // ✅ PROTECTED — delete token before creating session; link cannot be replayed.
+  // Email scanner clicks consume the token harmlessly if user has not clicked yet (15-min window limits damage).
   magicTokens.delete(token);
 
   const sid = crypto.randomBytes(32).toString('hex');

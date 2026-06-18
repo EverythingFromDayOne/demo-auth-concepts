@@ -1,5 +1,5 @@
 /*
- * Terminal 1: cd auth-concepts/basic-digest && npm install && npm run basic
+ * Terminal 1: cd auth-concepts/basic-digest && npm install && npm run vulnerable
  * SimpleDesk — HTTP Basic Auth demo (port 3049)
  */
 
@@ -26,7 +26,12 @@ const TICKETS = [
   { id: 3, title: 'Software license', status: 'closed', priority: 'low', author: 'alice' },
 ];
 
-// ⚠️ VULNERABILITY: Basic Auth sends base64(username:password) on every request — trivially decoded with atob()
+// ⚠️ VULNERABLE — HTTP Basic Auth sends base64(username:password) on every request.
+// Base64 is encoding, not encryption — atob("YWxpY2U6cGFzczEyMzQ=") instantly reveals alice:pass1234
+// in any browser console. The Authorization header is attached to every API call and page load,
+// so every reverse proxy, CDN access log, and packet capture contains the plaintext-equivalent
+// password. There is no server-side session: credentials cannot be revoked without changing the
+// password, and "logout" is impossible — the browser keeps sending the same header until cleared.
 function basicAuth(req, res, next) {
   const authHeader = req.headers.authorization || '';
 

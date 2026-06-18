@@ -15,9 +15,18 @@ app.use(cors({ origin: 'http://localhost:3059' }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ⚠️ VULNERABILITY: weak, predictable secret — brute-forceable
+// ⚠️ VULNERABLE — "secret" is a well-known weak HMAC-SHA256 signing key.
+// JWT signatures are HMAC-SHA256(header.payload, key). An attacker who captures any signed
+// token can run it offline through jwt-cracker, hashcat, or a dictionary attack — no server
+// contact needed, no rate-limit possible. The string "secret" appears in the first 100 entries
+// of every JWT wordlist. Once recovered, the attacker can forge any payload: set role:"admin",
+// sub: any userId, or issue tokens for arbitrary usernames. The server cannot distinguish a
+// forged token from a legitimate one.
 const JWT_SECRET = 'secret';
-// ⚠️ VULNERABILITY: long expiry — stolen tokens stay valid for 24 hours
+// ⚠️ VULNERABLE — 24-hour expiry means a stolen token grants access for a full day.
+// If a token leaks via a log file, XSS payload, or compromised device, the attacker has a
+// 24-hour window to use it. There is no server-side session to invalidate — the only recourse
+// is rotating the JWT_SECRET, which invalidates every active session for every user simultaneously.
 const JWT_EXPIRES_IN = '24h';
 
 const USERS = [

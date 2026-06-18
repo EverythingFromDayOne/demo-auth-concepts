@@ -18,7 +18,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ⚠️ VULNERABILITY: weak auth server secret
+// ⚠️ VULNERABLE — weak auth server secret ('oauth-secret') for signing id_tokens and codes.
+// Offline brute-force of captured tokens reveals the key; attacker can mint arbitrary id_tokens
+// and authorization codes without user interaction.
 const AUTH_SECRET = 'oauth-secret';
 
 const CLIENTS = {
@@ -130,7 +132,10 @@ app.get('/auth/authorize', function (req, res) {
   if (!client.redirectUris.includes(redirectUri)) return res.status(400).send('redirect_uri not registered');
   if (responseType !== 'code') return res.status(400).send('Only response_type=code supported');
 
-  // ⚠️ VULNERABILITY: state not required or validated
+  // ⚠️ VULNERABLE — state not required or validated on authorization request.
+  // ConnectApp does not generate a CSRF token; attacker can pre-initiate OAuth, obtain a code
+  // bound to attacker's account, trick victim into visiting /callback?code=ATTACKER_CODE, and link
+  // victim's ConnectApp session to attacker's GrantID account (account linking CSRF).
   // SSR required: OAuth params injected into hidden form fields
   res.send(AUTHORIZE_HTML({
     clientName: client.name,
@@ -172,7 +177,8 @@ app.post('/auth/approve', function (req, res) {
     expiresAt: Date.now() + 60000,
   });
 
-  // ⚠️ VULNERABILITY: state echoed without client-side validation
+  // ⚠️ VULNERABLE — state echoed in callback URL without client-side validation.
+  // ConnectApp never stored or checked state, so a forged callback with attacker's code succeeds.
   const callbackUrl = redirectUri + '?code=' + code + '&state=' + encodeURIComponent(state);
   console.log('[Auth] Code issued for ' + user.email + ', redirecting to: ' + callbackUrl);
   res.redirect(callbackUrl);
@@ -275,7 +281,9 @@ app.get('/', function (req, res) {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ⚠️ VULNERABILITY: no state parameter generated
+// ⚠️ VULNERABLE — /connect does not generate state parameter in authorization URL.
+// No CSRF binding between ConnectApp's session and the OAuth round-trip; victim can be tricked
+// into completing authorization for an account the attacker controls.
 app.get('/connect', function (req, res) {
   const authUrl = BASE + '/auth/authorize?' +
     'client_id=connectapp&' +
@@ -287,7 +295,8 @@ app.get('/connect', function (req, res) {
 
 app.get('/callback', async function (req, res) {
   const code = req.query.code;
-  // ⚠️ VULNERABILITY: state not verified against stored value
+  // ⚠️ VULNERABLE — callback does not verify state against a server-stored value.
+  // No PKCE: intercepted auth code can be exchanged at /auth/token by any party with client_secret.
   if (!code) return res.status(400).send('No code received');
 
   try {

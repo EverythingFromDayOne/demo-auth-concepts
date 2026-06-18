@@ -83,7 +83,7 @@ app.get('/api/register/begin', requireAuth, async (req, res) => {
   const options = await generateRegistrationOptions({
     rpName: 'CloudPortal',
     rpID: 'localhost',
-    // ✅ PROTECTED: opaque ID
+    // ✅ PROTECTED — opaque random userID instead of embedding username (no PII in credential).
     userID: Buffer.from(crypto.randomUUID()),
     userName: username,
     userDisplayName: fullName,
@@ -92,7 +92,7 @@ app.get('/api/register/begin', requireAuth, async (req, res) => {
     authenticatorSelection: {
       authenticatorAttachment: 'platform',
       residentKey: 'preferred',
-      // ✅ PROTECTED: UV required
+      // ✅ PROTECTED — userVerification required; authenticator must verify PIN/biometric before signing.
       userVerification: 'required',
     },
     timeout: 60000,
@@ -159,7 +159,8 @@ app.post('/api/auth/complete', async (req, res) => {
     authChallenges.delete(challengeKey);
     return res.status(400).json({ error: 'Authentication challenge expired — try again' });
   }
-  // ✅ PROTECTED: single-use challenge
+  // ✅ PROTECTED — single-use challenge deleted immediately after lookup.
+  // Replaying a captured assertion fails because expectedChallenge no longer exists in authChallenges.
   authChallenges.delete(challengeKey);
 
   let foundUsername = null;
@@ -193,6 +194,8 @@ app.post('/api/auth/complete', async (req, res) => {
   }
   if (!verification.verified) return res.status(400).json({ error: 'Authentication failed' });
 
+  // ✅ PROTECTED — counter anomaly detection: newCounter must be strictly greater than stored value.
+  // Cloned authenticator produces duplicate counters; server rejects and can alert the user.
   const prev = cred.counter;
   cred.counter = verification.authenticationInfo.newCounter;
   if (verification.authenticationInfo.newCounter > 0 && verification.authenticationInfo.newCounter <= prev) {

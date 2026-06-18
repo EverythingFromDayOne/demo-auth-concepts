@@ -1,5 +1,5 @@
 /*
- * Terminal 3: cd auth-concepts/basic-digest && npm run session
+ * Terminal 3: cd auth-concepts/basic-digest && npm run secure
  * SimpleDesk — Session Token Auth (improved, port 3051)
  */
 
@@ -27,6 +27,10 @@ const TICKETS = [
 
 const sessions = new Map();
 
+// ✅ PROTECTED — password sent once at POST /api/login, then discarded from the wire.
+// Subsequent requests carry an opaque random token in Authorization: Bearer — not the password.
+// sessions.delete(token) on logout genuinely invalidates access; server-side state makes revocation
+// possible. Token is stored in localStorage and sent via Bearer header — scope-limited to this origin.
 app.post('/api/login', function (req, res) {
   const { username, password } = req.body;
   const user = USERS.find(function (u) {
@@ -74,6 +78,8 @@ app.post('/api/tickets', requireAuth, function (req, res) {
 });
 
 app.post('/api/logout', requireAuth, function (req, res) {
+  // ✅ PROTECTED — sessions.delete(token) immediately invalidates the Bearer token server-side.
+  // Unlike Basic Auth, logout is real: subsequent requests with the old token receive 401.
   sessions.delete(req.token);
   res.json({ message: 'Logged out' });
 });

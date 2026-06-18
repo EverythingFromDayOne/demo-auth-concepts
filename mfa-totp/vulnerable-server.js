@@ -78,7 +78,10 @@ app.post('/api/verify-totp', (req, res) => {
   if (!pending) return res.status(401).json({ error: 'No pending session — log in again' });
   const user = USERS.find((u) => u.username === pending.username);
 
-  // ⚠️ VULNERABILITY: wide window and no replay/rate-limit.
+  // ⚠️ VULNERABLE — window:10 accepts TOTP codes from ±5 minutes (20 valid codes at once).
+  // No replay prevention: same OTP can be submitted multiple times within the window.
+  // No rate limiting: attacker can brute-force 1,000,000 six-digit codes; with 20 valid at
+  // any moment, success in ~50,000 attempts on average without lockout.
   const valid = speakeasy.totp.verify({
     secret: user.totpSecret,
     encoding: 'base32',
@@ -94,7 +97,8 @@ app.post('/api/verify-totp', (req, res) => {
   res.json({ token });
 });
 
-// ⚠️ VULNERABILITY: secret exposure
+// ⚠️ VULNERABLE — debug endpoint exposes TOTP secret in API response.
+// Production servers never return totpSecret; attacker with API access can generate valid codes forever.
 app.get('/api/debug/totp-secret', (req, res) => {
   const { username } = req.query;
   const user = USERS.find((u) => u.username === username);

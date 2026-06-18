@@ -2,9 +2,9 @@
   "name": "basic-digest-demo",
   "version": "1.0.0",
   "scripts": {
-    "basic": "node basic-server.js",
+    "vulnerable": "node basic-server.js",
     "guide": "node guide-server.js",
-    "session": "node session-server.js",
+    "secure": "node session-server.js",
     "start": "node basic-server.js"
   },
   "dependencies": {

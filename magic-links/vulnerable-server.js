@@ -54,10 +54,13 @@ function getProfile(email) {
 
 const sessions = new Map();
 
-// ⚠️ VULNERABILITY: no expiresAt, no used flag — tokens valid forever and reusable
+// ⚠️ VULNERABLE — magic tokens have no expiresAt or used flag; valid forever and reusable.
+// Old links in forwarded email, archived inbox, or email-provider link scanners remain credentials.
 const magicTokens = new Map();
 
-// ⚠️ VULNERABILITY 1: Math.random() is NOT cryptographically secure
+// ⚠️ VULNERABLE — Math.random() for token generation (~30 bits effective entropy).
+// PRNG is seeded predictably; ~1 billion possible tokens from three .toString(36) slices.
+// Attacker with high request volume or timing observation can predict valid tokens without the email.
 function generateToken() {
   return Math.random().toString(36).slice(2) +
     Math.random().toString(36).slice(2) +
@@ -81,8 +84,7 @@ app.post('/api/auth/send-link', function (req, res) {
     return res.status(400).json({ error: 'Valid email address required' });
   }
 
-  // ⚠️ VULNERABILITY 4: No rate limiting — inbox spam / DoS possible
-
+  // ⚠️ VULNERABLE — no rate limiting on send-link; attacker can flood inbox or probe for tokens.
   const token = generateToken();
   magicTokens.set(token, { email: email, createdAt: Date.now() });
 
@@ -108,18 +110,18 @@ app.get('/auth/verify', function (req, res) {
     return res.redirect('/?error=invalid_token');
   }
 
-  // ⚠️ VULNERABILITY 2: No expiry check — token works indefinitely
-  // ⚠️ VULNERABILITY 3: Token NOT deleted — unlimited replays
-
+  // ⚠️ VULNERABLE — no expiry check; token works indefinitely after creation.
+  // ⚠️ VULNERABLE — token NOT deleted after use; same link works unlimited times (email scanners consume sessions).
   const sid = crypto.randomBytes(32).toString('hex');
   sessions.set(sid, { email: stored.email, createdAt: Date.now() });
 
-  // ⚠️ VULNERABILITY 6: Missing HttpOnly and SameSite
+  // ⚠️ VULNERABLE — session cookie missing HttpOnly and SameSite; readable by JavaScript and sent cross-site.
   res.setHeader('Set-Cookie', 'iw_session=' + sid + '; Path=/');
   res.redirect('/dashboard');
 });
 
-// ⚠️ VULNERABILITY 7: All pending tokens exposed in plain text
+// ⚠️ VULNERABLE — debug endpoint lists all pending magic tokens in plain text.
+// Any caller learns every active login link and can hijack sessions before victims click.
 app.get('/api/debug/tokens', function (req, res) {
   const tokens = [];
   for (const entry of magicTokens.entries()) {

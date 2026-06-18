@@ -1,5 +1,5 @@
 /*
- * Terminal 1: cd auth-concepts/api-key && npm install && npm run url
+ * Terminal 1: cd auth-concepts/api-key && npm install && npm run vulnerable
  * DataPipe — API key in URL query param (port 3055)
  */
 
@@ -43,8 +43,12 @@ app.use(function (req, res, next) {
   next();
 });
 
-// ⚠️ VULNERABILITY: API key in URL query parameter
-// → Appears in: server access logs, browser history, Referer headers, CDN logs
+// ⚠️ VULNERABLE — API key passed as URL query parameter (?api_key=sk_test_...).
+// URLs are logged by every reverse proxy, load balancer, CDN, and web server access log.
+// The key appears in server logs, browser history, and the HTTP Referer header if the page
+// links to another site. A compromised log file exposes every key that ever made a request.
+// Sharing a URL for debugging silently shares the credential. No per-key scoping beyond scopes
+// array — the key grants access to all endpoints the owner is entitled to.
 function apiKeyAuth(req, res, next) {
   const key = req.query.api_key;
 

@@ -44,7 +44,11 @@ app.post('/api/login', function (req, res) {
     createdAt: Date.now(),
   });
 
-  // ⚠️ VULNERABILITY: no HttpOnly — JS can read document.cookie
+  // ⚠️ VULNERABLE — cookie set without HttpOnly; JavaScript can read document.cookie.
+  // Any XSS payload — even a one-liner in a stored comment or reflected URL param — can call
+  // document.cookie, read the full nk_session token, and fetch() it to an attacker server.
+  // Missing SameSite=Strict: the cookie is sent on cross-site requests, enabling CSRF.
+  // The session survives server restart; the attacker's stolen copy is just as valid as the original.
   res.setHeader('Set-Cookie', 'nk_session=' + sid + '; Path=/; SameSite=Lax');
   res.json({
     success: true,

@@ -1,5 +1,5 @@
 /*
- * Terminal 3: cd auth-concepts/api-key && npm run header
+ * Terminal 3: cd auth-concepts/api-key && npm run secure
  * DataPipe — API key in Authorization header (port 3057)
  */
 
@@ -40,7 +40,12 @@ app.use(function (req, res, next) {
   next();
 });
 
-// ✅ PROTECTED: Key in Authorization header — not in URL, not in logs, not in Referer
+// ✅ PROTECTED — API key read from Authorization: Bearer header, not the URL.
+// By convention and configuration, reverse proxies strip or exclude Authorization headers
+// from access logs. The key never appears in URLs, browser history, or Referer headers.
+// DevTools Network tab shows it, but only to someone with local access to the browser.
+// Per-key metadata (owner, plan, scopes, rateLimit) enables auditing, rotation, and
+// least-privilege scoping — each key can be limited to specific API surfaces.
 function apiKeyAuth(req, res, next) {
   const auth = req.headers.authorization || '';
   const key = auth.startsWith('Bearer ') ? auth.slice(7) : null;

@@ -44,7 +44,10 @@ app.post('/api/login', function (req, res) {
     createdAt: Date.now(),
   });
 
-  // ✅ PROTECTED: HttpOnly + SameSite=Strict — JS cannot read document.cookie
+  // ✅ PROTECTED — HttpOnly + SameSite=Strict; JavaScript cannot read document.cookie.
+  // HttpOnly: the browser sends the cookie automatically but blocks all JS access — document.cookie
+  // returns "". XSS payloads cannot exfiltrate what they cannot read.
+  // SameSite=Strict: cookie is not sent on cross-site navigations, eliminating CSRF for this session.
   // Production version would include `Secure` — requires HTTPS.
   // In this demo over HTTP, Secure is omitted so the browser sends the cookie.
   // In production: `nk_session=${sid}; Path=/; HttpOnly; Secure; SameSite=Strict`

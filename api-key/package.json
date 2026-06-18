@@ -2,9 +2,9 @@
   "name": "api-key-demo",
   "version": "1.0.0",
   "scripts": {
-    "url": "node apikey-url-server.js",
+    "vulnerable": "node apikey-url-server.js",
     "guide": "node guide-server.js",
-    "header": "node apikey-header-server.js",
+    "secure": "node apikey-header-server.js",
     "start": "node apikey-url-server.js"
   },
   "dependencies": {

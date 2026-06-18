@@ -32,12 +32,17 @@ function clearRefreshCookie(res) {
   res.setHeader('Set-Cookie', 'ar_refresh=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
 }
 
-// ✅ PROTECTED: cryptographically strong secret generated at startup
+// ✅ PROTECTED — cryptographically strong access-token signing secret generated at startup.
+// crypto.randomBytes(64) from OS CSPRNG; brute-forcing the HMAC key is computationally infeasible.
+// In production: persist via environment variable so tokens survive server restarts.
 const ACCESS_SECRET = crypto.randomBytes(64).toString('hex');
 const ACCESS_EXPIRY = '15m';
 const REFRESH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-// ✅ PROTECTED: each refresh token entry has a family ID — reuse revokes the whole family
+// ✅ PROTECTED — each refresh token entry has a family ID for reuse detection.
+// Every login creates a linked "family" of refresh tokens. If an already-rotated token is
+// presented again, the entire family is revoked — all sessions for that login are destroyed.
+// This detects token theft even when the attacker refreshes before the legitimate user does.
 const refreshTokenStore = new Map();
 // In production: store revoked families in Redis with a TTL matching the max refresh token lifetime
 const revokedFamilies = new Set();
@@ -98,7 +103,9 @@ app.post('/api/login', function (req, res) {
   });
 });
 
-// ✅ PROTECTED: rotation + reuse detection — old cookie cleared, new cookie set
+// ✅ PROTECTED — rotation + reuse detection on every /api/refresh call.
+// Old refresh token is deleted and recorded as rotated; new token issued in Set-Cookie.
+// If a stolen token is reused after rotation, revokeFamily() kills every session in that family.
 app.post('/api/refresh', function (req, res) {
   const refreshToken = getRefreshCookie(req);
   const stored = refreshToken ? refreshTokenStore.get(refreshToken) : null;
@@ -126,7 +133,9 @@ app.post('/api/refresh', function (req, res) {
 
   const user = USERS.find(function (u) { return u.id === stored.userId; });
 
-  // ✅ ROTATION: delete old, record as rotated, issue new token in new cookie
+  // ✅ PROTECTED — rotation: delete old token, record in rotatedTokens, issue new cookie.
+  // Attacker gets at most one refresh from a stolen token; legitimate user's next refresh
+  // fails if attacker used it first, surfacing the compromise.
   refreshTokenStore.delete(refreshToken);
   rotatedTokens.set(refreshToken, stored.familyId);
 
@@ -190,7 +199,9 @@ app.post('/api/logout', function (req, res) {
   res.json({ message: '✅ Logged out — refresh cookie cleared' });
 });
 
-// ✅ PROTECTED: revoke all sessions on password change — clears cookie
+// ✅ PROTECTED — revoke all refresh-token families on password change.
+// Iterates every stored token for this userId, adds each family to revokedFamilies, clears cookie.
+// Forces re-login on all devices — standard response to suspected credential compromise.
 app.post('/api/change-password', requireAccess, function (req, res) {
   const userId = req.user.sub;
   for (const [token, data] of refreshTokenStore.entries()) {
