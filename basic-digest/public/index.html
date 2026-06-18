@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SimpleDesk — IT Helpdesk</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="demo-banner"></div>
+  <header class="topbar">
+    <div>
+      <span class="logo">Simple<span>Desk</span></span>
+      <span class="tagline">Submit and track IT support tickets</span>
+    </div>
+    <div class="user-info" id="user-display">Loading…</div>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <a href="#" class="active">Tickets</a>
+      <a href="#">Profile</a>
+    </nav>
+    <main class="main">
+      <h2>Support Tickets</h2>
+      <p class="loading" id="loading">Loading tickets…</p>
+      <table id="ticket-table" style="display:none">
+        <thead>
+          <tr><th>ID</th><th>Title</th><th>Priority</th><th>Status</th></tr>
+        </thead>
+        <tbody id="ticket-body"></tbody>
+      </table>
+    </main>
+  </div>
+  <script>
+    fetch('/api/config').then(function (r) { return r.json(); }).then(function (cfg) {
+      var banner = document.getElementById('demo-banner');
+      if (cfg.mode === 'vulnerable') {
+        banner.style.cssText = 'background:#fffbeb;border-bottom:2px solid #f59e0b;color:#92400e;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '⚠ VULNERABLE: Basic Auth sends base64(username:password) with EVERY request — decode with atob() in DevTools.';
+      } else {
+        banner.style.cssText = 'background:#f0fdf4;border-bottom:2px solid #22c55e;color:#166534;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '✅ SECURE: Session token auth — credentials sent once at login.';
+      }
+    });
+
+    fetch('/api/me', { credentials: 'same-origin' })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        document.getElementById('user-display').textContent =
+          data.fullName + ' (' + data.username + ')';
+      });
+
+    fetch('/api/tickets', { credentials: 'same-origin' })
+      .then(function (res) { return res.json(); })
+      .then(function (tickets) {
+        document.getElementById('loading').style.display = 'none';
+        var table = document.getElementById('ticket-table');
+        var tbody = document.getElementById('ticket-body');
+        table.style.display = 'table';
+        tickets.forEach(function (t) {
+          var tr = document.createElement('tr');
+          tr.innerHTML =
+            '<td>' + t.id + '</td>' +
+            '<td>' + t.title + '</td>' +
+            '<td><span class="badge ' + t.priority + '">' + t.priority + '</span></td>' +
+            '<td><span class="badge ' + t.status + '">' + t.status + '</span></td>';
+          tbody.appendChild(tr);
+        });
+      });
+  </script>
+</body>
+</html>

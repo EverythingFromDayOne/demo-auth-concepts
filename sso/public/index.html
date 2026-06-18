@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard — WorkHub</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="demo-banner" style="position:fixed;top:0;left:0;right:0;z-index:1000"></div>
+  <aside class="sidebar" style="margin-top:2.5rem">
+    <div class="logo">WorkHub</div>
+    <div class="logo-sub">Your team's command center</div>
+    <div class="nav-item active">Projects</div>
+    <div class="nav-item">Tasks</div>
+    <div class="nav-item">Team</div>
+    <div class="nav-item">Reports</div>
+  </aside>
+  <div class="main" style="margin-top:2.5rem">
+    <header class="topbar">
+      <h1>Project Dashboard</h1>
+      <div class="user-area">
+        <span class="sso-badge">Signed in via CorpID SSO</span>
+        <div class="user-badge">
+          <div class="user-name" id="user-name">Loading…</div>
+          <div class="user-email" id="user-email"></div>
+          <span class="role-pill" id="user-role"></span>
+        </div>
+        <a class="btn-logout" href="/logout">Sign Out</a>
+      </div>
+    </header>
+    <div class="content">
+      <h2>Active Projects</h2>
+      <table>
+        <thead><tr><th>Project</th><th>Status</th><th>Members</th></tr></thead>
+        <tbody id="projects-body"></tbody>
+      </table>
+    </div>
+  </div>
+  <script>
+  fetch('/api/config').then(function (r) { return r.json(); }).then(function (cfg) {
+    var banner = document.getElementById('demo-banner');
+    if (cfg.mode === 'vulnerable') {
+      banner.style.cssText = 'background:#fffbeb;border-bottom:2px solid #f59e0b;color:#92400e;padding:0.65rem 1.5rem;font-size:0.85rem';
+      banner.textContent = '⚠ VULNERABLE: redirect_uri is not validated — attacker can redirect assertion tokens to any URL.';
+    } else {
+      banner.style.cssText = 'background:#f0fdf4;border-bottom:2px solid #22c55e;color:#166534;padding:0.65rem 1.5rem;font-size:0.85rem';
+      banner.textContent = '✅ SECURE: redirect_uri validated against exact allowlist before authentication.';
+    }
+  });
+
+  fetch('/api/me').then(function (r) {
+    if (!r.ok) { window.location.href = '/'; return null; }
+    return r.json();
+  }).then(function (me) {
+    if (!me) return;
+    document.getElementById('user-name').textContent = me.name;
+    document.getElementById('user-email').textContent = me.email;
+    document.getElementById('user-role').textContent = me.role;
+  });
+
+  fetch('/api/projects').then(function (r) {
+    if (!r.ok) return [];
+    return r.json();
+  }).then(function (projects) {
+    var tbody = document.getElementById('projects-body');
+    projects.forEach(function (p) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + p.name + '</td><td>' + p.status + '</td><td>' + p.members + '</td>';
+      tbody.appendChild(tr);
+    });
+  });
+  </script>
+</body>
+</html>

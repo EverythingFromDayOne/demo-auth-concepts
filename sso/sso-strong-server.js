@@ -3,6 +3,7 @@
  * WorkHub (SP) + CorpID (IdP) — redirect_uri allowlist + state validation (port 3066)
  */
 
+const path = require('path');
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -13,6 +14,7 @@ const PORT = 3066;
 
 app.use(cors({ origin: 'http://localhost:3065' }));
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
 
 const sessions = new Map();
 const idpSessions = new Map();
@@ -39,6 +41,12 @@ const IDP_USERS = [
   { id: 3, username: 'admin@corp.com', password: 'admin456', name: 'Admin User', role: 'admin' },
 ];
 
+const PROJECTS = [
+  { name: 'Q2 Platform Migration', status: 'On track', members: 8 },
+  { name: 'Customer Portal Redesign', status: 'At risk', members: 5 },
+  { name: 'API Gateway v3', status: 'Planning', members: 3 },
+];
+
 function escHtml(str) {
   return String(str || '')
     .replace(/&/g, '&amp;')
@@ -57,6 +65,13 @@ function getCookie(req, name) {
 function getWhSession(req) {
   const sid = getCookie(req, 'wh_session');
   return sid ? sessions.get(sid) : null;
+}
+
+function requireWhSession(req, res, next) {
+  const session = getWhSession(req);
+  if (!session) return res.status(401).json({ error: 'Not authenticated' });
+  req.whSession = session;
+  next();
 }
 
 function getIdpUser(req) {
@@ -207,111 +222,6 @@ function IDP_LOGIN_HTML(opts) {
 </html>`;
 }
 
-function DASHBOARD_HTML(session) {
-  const projects = [
-    { name: 'Q2 Platform Migration', status: 'On track', members: 8 },
-    { name: 'Customer Portal Redesign', status: 'At risk', members: 5 },
-    { name: 'API Gateway v3', status: 'Planning', members: 3 },
-  ];
-
-  const projectRows = projects.map(function (p) {
-    return '<tr><td>' + p.name + '</td><td>' + p.status + '</td><td>' + p.members + '</td></tr>';
-  }).join('');
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dashboard — WorkHub</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #ffffff;
-      color: #111827;
-      min-height: 100vh;
-      display: flex;
-    }
-    .sidebar {
-      width: 220px;
-      background: #f9fafb;
-      border-right: 1px solid #e5e7eb;
-      padding: 1.5rem 1rem;
-      flex-shrink: 0;
-    }
-    .logo { font-size: 1.25rem; font-weight: 700; color: #6366f1; margin-bottom: 0.25rem; }
-    .logo-sub { font-size: 0.72rem; color: #6b7280; margin-bottom: 2rem; }
-    .nav-item {
-      padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.88rem;
-      color: #374151; margin-bottom: 0.25rem;
-    }
-    .nav-item.active { background: #eef2ff; color: #6366f1; font-weight: 600; }
-    .main { flex: 1; display: flex; flex-direction: column; }
-    .topbar {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 1rem 2rem; border-bottom: 1px solid #e5e7eb;
-    }
-    .topbar h1 { font-size: 1.1rem; font-weight: 600; }
-    .user-area { display: flex; align-items: center; gap: 1rem; }
-    .sso-badge {
-      background: #eef2ff; color: #4f46e5; font-size: 0.72rem;
-      padding: 0.25rem 0.6rem; border-radius: 999px; font-weight: 600;
-    }
-    .user-badge { text-align: right; }
-    .user-name { font-size: 0.88rem; font-weight: 600; color: #111827; }
-    .user-email { font-size: 0.75rem; color: #6b7280; }
-    .btn-logout {
-      background: #fff; border: 1px solid #d1d5db; color: #374151;
-      padding: 0.4rem 0.85rem; border-radius: 6px; font-size: 0.8rem;
-      text-decoration: none; font-weight: 500;
-    }
-    .btn-logout:hover { background: #f9fafb; }
-    .content { padding: 2rem; }
-    .content h2 { font-size: 1rem; margin-bottom: 1rem; color: #374151; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-    th { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 2px solid #e5e7eb; color: #6b7280; font-weight: 600; }
-    td { padding: 0.75rem; border-bottom: 1px solid #f3f4f6; }
-    .role-pill {
-      display: inline-block; background: #f3f4f6; color: #4b5563;
-      font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 4px; margin-top: 0.5rem;
-    }
-  </style>
-</head>
-<body>
-  <aside class="sidebar">
-    <div class="logo">WorkHub</div>
-    <div class="logo-sub">Your team's command center</div>
-    <div class="nav-item active">Projects</div>
-    <div class="nav-item">Tasks</div>
-    <div class="nav-item">Team</div>
-    <div class="nav-item">Reports</div>
-  </aside>
-  <div class="main">
-    <header class="topbar">
-      <h1>Project Dashboard</h1>
-      <div class="user-area">
-        <span class="sso-badge">Signed in via CorpID SSO</span>
-        <div class="user-badge">
-          <div class="user-name">${session.name}</div>
-          <div class="user-email">${session.email}</div>
-          <span class="role-pill">${session.role}</span>
-        </div>
-        <a class="btn-logout" href="/logout">Sign Out</a>
-      </div>
-    </header>
-    <div class="content">
-      <h2>Active Projects</h2>
-      <table>
-        <thead><tr><th>Project</th><th>Status</th><th>Members</th></tr></thead>
-        <tbody>${projectRows}</tbody>
-      </table>
-    </div>
-  </div>
-</body>
-</html>`;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // IdP routes — CorpID Identity Provider (hardened)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -432,7 +342,23 @@ app.get('/callback', function (req, res) {
 app.get('/dashboard', function (req, res) {
   const session = getWhSession(req);
   if (!session) return res.redirect('/');
-  res.send(DASHBOARD_HTML(session));
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/api/config', function (_req, res) {
+  res.json({ mode: 'secure', port: PORT });
+});
+
+app.get('/api/me', requireWhSession, function (req, res) {
+  res.json({
+    name: req.whSession.name,
+    email: req.whSession.email,
+    role: req.whSession.role,
+  });
+});
+
+app.get('/api/projects', requireWhSession, function (_req, res) {
+  res.json(PROJECTS);
 });
 
 app.get('/logout', function (req, res) {

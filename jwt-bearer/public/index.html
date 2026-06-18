@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AuthFlow — JWT Playground</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="demo-banner"></div>
+  <header class="topbar">
+    <div>
+      <div class="logo">Auth<span>Flow</span></div>
+      <div class="tagline">Stateless auth for modern apps</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:1rem">
+      <p class="signout-note" id="signout-note"></p>
+      <button type="button" class="btn-signout" id="btn-signout">Sign Out</button>
+    </div>
+  </header>
+  <div class="container">
+    <div class="card" id="login-panel">
+      <h2>1. Login — Issue JWT</h2>
+      <label for="username">Username</label>
+      <input class="login-input" type="text" id="username" value="alice" autocomplete="username">
+      <label for="password">Password</label>
+      <input class="login-input" type="password" id="password" value="pass1234" autocomplete="current-password">
+      <button class="btn" id="btn-login">Sign In → Get JWT</button>
+      <p id="err"></p>
+    </div>
+
+    <div class="card" id="token-display" style="display:none">
+      <h2>2. JWT Structure</h2>
+      <div style="margin-bottom:1rem">
+        <label style="font-size:0.75rem;color:#94a3b8">Raw JWT:</label>
+        <div id="raw-token"></div>
+      </div>
+      <div class="grid-3">
+        <div>
+          <div style="font-size:0.72rem;color:#f87171;font-weight:600;margin-bottom:0.25rem">HEADER (base64url)</div>
+          <pre class="box" id="jwt-header" style="color:#fca5a5"></pre>
+        </div>
+        <div>
+          <div style="font-size:0.72rem;color:#a78bfa;font-weight:600;margin-bottom:0.25rem">PAYLOAD (base64url)</div>
+          <pre class="box" id="jwt-payload" style="color:#c4b5fd"></pre>
+        </div>
+        <div>
+          <div style="font-size:0.72rem;color:#60a5fa;font-weight:600;margin-bottom:0.25rem">SIGNATURE (HS256)</div>
+          <pre class="box" id="jwt-sig" style="color:#93c5fd"></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="api-panel" style="display:none">
+      <h2>3. Test API with Bearer Token</h2>
+      <div>
+        <button class="btn secondary" id="btn-me">GET /api/me</button>
+        <button class="btn secondary" id="btn-tasks">GET /api/tasks</button>
+        <button class="btn secondary" id="btn-admin">GET /api/admin/users</button>
+      </div>
+      <pre class="response" id="api-output">Click an endpoint to call the API</pre>
+    </div>
+  </div>
+  <script>
+  var currentToken = null;
+
+  fetch('/api/config').then(function (r) { return r.json(); }).then(function (cfg) {
+    var banner = document.getElementById('demo-banner');
+    var signoutNote = document.getElementById('signout-note');
+    if (cfg.mode === 'vulnerable') {
+      banner.style.cssText = 'background:#fffbeb;border-bottom:2px solid #f59e0b;color:#92400e;padding:0.65rem 1.5rem;font-size:0.85rem';
+      banner.textContent = '⚠ VULNERABLE: JWT signed with secret="secret" — brute-forceable. See demo-attacked/jwt-attacks/ for the full attack.';
+      signoutNote.textContent =
+        '⚠ JWT logout is client-side only — the token is still valid on the server until it expires. True revocation requires a server-side denylist. See the Access/Refresh demo (port 3063).';
+    } else {
+      banner.style.cssText = 'background:#f0fdf4;border-bottom:2px solid #22c55e;color:#166534;padding:0.65rem 1.5rem;font-size:0.85rem';
+      banner.textContent = '✅ SECURE: 64-byte random secret, 15-minute expiry, HS256 algorithm whitelisted.';
+      signoutNote.textContent =
+        'This secret was generated with crypto.randomBytes(64) at startup. In production, set JWT_SECRET as an environment variable (never commit to git). Expiry: 15 minutes — user must refresh or re-login.';
+    }
+  });
+
+  function b64Decode(str) {
+    try { return JSON.parse(atob(str.replace(/-/g, '+').replace(/_/g, '/'))); }
+    catch (e) { return str; }
+  }
+
+  function displayToken(token) {
+    var parts = token.split('.');
+    document.getElementById('raw-token').innerHTML =
+      '<span style="color:#f87171">' + parts[0] + '</span>' +
+      '<span style="color:#475569">.</span>' +
+      '<span style="color:#a78bfa">' + parts[1] + '</span>' +
+      '<span style="color:#475569">.</span>' +
+      '<span style="color:#60a5fa">' + parts[2] + '</span>';
+    document.getElementById('jwt-header').textContent = JSON.stringify(b64Decode(parts[0]), null, 2);
+    document.getElementById('jwt-payload').textContent = JSON.stringify(b64Decode(parts[1]), null, 2);
+    document.getElementById('jwt-sig').textContent =
+      parts[2] + '\n\n(HMAC-SHA256 of header.payload using the server secret)';
+    document.getElementById('token-display').style.display = '';
+    document.getElementById('api-panel').style.display = '';
+    document.getElementById('btn-signout').style.display = '';
+    document.getElementById('signout-note').style.display = '';
+  }
+
+  document.getElementById('btn-login').addEventListener('click', async function () {
+    document.getElementById('err').textContent = '';
+    var res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value
+      })
+    });
+    var data = await res.json();
+    if (!res.ok) {
+      document.getElementById('err').textContent = data.error;
+      return;
+    }
+    currentToken = data.token;
+    document.getElementById('login-panel').style.display = 'none';
+    displayToken(data.token);
+  });
+
+  function callApi(path) {
+    if (!currentToken) return;
+    fetch(path, { headers: { 'Authorization': 'Bearer ' + currentToken } })
+      .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, data: d }; }); })
+      .then(function (r) {
+        document.getElementById('api-output').textContent = JSON.stringify(r.data, null, 2);
+      });
+  }
+
+  document.getElementById('btn-me').addEventListener('click', function () { callApi('/api/me'); });
+  document.getElementById('btn-tasks').addEventListener('click', function () { callApi('/api/tasks'); });
+  document.getElementById('btn-admin').addEventListener('click', function () { callApi('/api/admin/users'); });
+
+  document.getElementById('btn-signout').addEventListener('click', function () {
+    currentToken = null;
+    document.getElementById('token-display').style.display = 'none';
+    document.getElementById('api-panel').style.display = 'none';
+    document.getElementById('btn-signout').style.display = 'none';
+    document.getElementById('signout-note').style.display = 'none';
+    document.getElementById('login-panel').style.display = '';
+    document.getElementById('api-output').textContent = 'Click an endpoint to call the API';
+  });
+  </script>
+</body>
+</html>

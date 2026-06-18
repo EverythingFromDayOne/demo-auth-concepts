@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Token Lifecycle Lab</title>
+  <link rel="stylesheet" href="/guide.css">
+</head>
+<body>
+  <h1>🔄 Access Tokens + Refresh Tokens — How They Work</h1>
+  <p class="subtitle">Short-lived access tokens for API calls. Long-lived refresh tokens to renew them — with rotation on the secure path.</p>
+
+  <div class="flow-box">
+    <div class="section-title">The Problem With Long-Lived Access Tokens</div>
+    <pre style="color:#cbd5e1;font-size:0.78rem;line-height:1.6">Option A: Long-lived access token (24h or more)
+  ✓ Simpler — one token does everything
+  ✗ If stolen: attacker has 24h of unchecked access
+  ✗ No way to add claims granularly (e.g. step-up auth)
+
+Option B: Short access token (15 min) + long refresh token (7–30 days)
+  ✓ Stolen access token expires in 15 min
+  ✓ Refresh token can be stored securely (httpOnly cookie or secure storage)
+  ✓ Can revoke all refresh tokens on logout or password change
+  ✗ More complex — client must handle 401 → refresh → retry</pre>
+  </div>
+
+  <div class="flow-box">
+    <div class="section-title">Token Lifecycle</div>
+    <pre style="color:#00ff41;font-size:0.72rem;line-height:1.5">1. LOGIN
+   Client                              Server
+      │                                   │
+      ├── POST /api/login ───────────────→│
+      │   { username, password }          │
+      │                                   │ accessToken  = jwt.sign({...}, secret, { expiresIn: '15m' })
+      │                                   │ refreshToken = crypto.randomBytes(40) → stored in DB
+      │←── { accessToken }               ─┤
+      │    Set-Cookie: ar_refresh=&lt;token&gt;; HttpOnly; SameSite=Strict; Path=/
+      │
+      │   Client stores:
+      │     accessToken  → JS memory (short-lived, ok to lose on F5)
+      │     refreshToken → httpOnly cookie (browser manages, JS cannot read)
+
+2. NORMAL API CALL (access token valid)
+      ├── GET /api/projects ────────────→ │
+      │   Authorization: Bearer &lt;access&gt;  │
+      │                                   │ jwt.verify(access, secret) → ok → serve response
+      │←── 200 + data ────────────────────┤
+
+3. ACCESS TOKEN EXPIRED (or page reload — F5 triggers this automatically)
+      ├── GET /api/projects ────────────→ │
+      │   Authorization: Bearer &lt;access&gt;  │
+      │                                   │ jwt.verify → TokenExpiredError → 401
+      │←── 401 Access token expired ──────┤
+      │
+      ├── POST /api/refresh ────────────→ │
+      │   (no body — browser sends        │
+      │    ar_refresh cookie automatically│
+      │    because it belongs to origin)  │
+      │                                   │ cookie lookup: valid? → issue new accessToken
+      │                                   │ [ROTATION, port 3063] new cookie set, old invalidated
+      │←── { accessToken }               ─┤
+      │    [ROTATION] Set-Cookie: ar_refresh=&lt;newToken&gt;; HttpOnly; ...
+      │
+      ├── GET /api/projects (retry) ────→ │
+      │   Authorization: Bearer &lt;new&gt;     │
+      │←── 200 + data ────────────────────┤
+
+4. LOGOUT
+      ├── POST /api/logout ─────────────→ │
+      │   (no body — cookie sent auto)    │ DB: delete token from store
+      │←── 200                           ─┤
+      │    Set-Cookie: ar_refresh=; Max-Age=0
+      │
+      Future /api/refresh calls → 401 (cookie cleared)</pre>
+  </div>
+
+  <div class="flow-box">
+    <div class="section-title">🔄 Refresh Token Rotation — Why It Matters</div>
+    <pre style="color:#cbd5e1;font-size:0.78rem;line-height:1.6;margin-bottom:1rem">WITHOUT rotation (port 3061):
+  refreshToken = "abc123" → issues access token → "abc123" still valid forever
+  Stolen "abc123" → attacker generates access tokens indefinitely
+
+WITH rotation (port 3063):
+  refreshToken = "abc123" → server issues:
+    new accessToken
+    new refreshToken = "xyz789"
+    deletes "abc123" from DB
+  Stolen "abc123" → used by attacker → reuse detected → revoke ALL tokens for that user
+
+This is called Refresh Token Rotation with Reuse Detection.</pre>
+    <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+      <tr style="color:#64748b;border-bottom:1px solid #1a3a1a">
+        <th style="text-align:left;padding:0.5rem">Scenario</th>
+        <th>Without Rotation (3061)</th>
+        <th>With Rotation (3063)</th>
+      </tr>
+      <tr style="border-bottom:1px solid #0d1f0d">
+        <td style="padding:0.5rem;color:#94a3b8">Normal use</td>
+        <td style="padding:0.5rem;color:#94a3b8">One refresh token used indefinitely</td>
+        <td style="padding:0.5rem;color:#94a3b8">New refresh token on every use</td>
+      </tr>
+      <tr style="border-bottom:1px solid #0d1f0d">
+        <td style="padding:0.5rem;color:#94a3b8">Token stolen from logs</td>
+        <td style="padding:0.5rem;color:#fca5a5">⚠ Permanent access for attacker</td>
+        <td style="padding:0.5rem;color:#4ade80">✅ Detected on reuse → all revoked</td>
+      </tr>
+      <tr style="border-bottom:1px solid #0d1f0d">
+        <td style="padding:0.5rem;color:#94a3b8">Password change</td>
+        <td style="padding:0.5rem;color:#fca5a5">⚠ Old refresh tokens still valid</td>
+        <td style="padding:0.5rem;color:#4ade80">✅ All refresh tokens revoked</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem;color:#94a3b8">Logout from all devices</td>
+        <td style="padding:0.5rem;color:#fca5a5">⚠ Can't invalidate individual tokens</td>
+        <td style="padding:0.5rem;color:#4ade80">✅ Delete all tokens for user in DB</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="flow-box">
+    <div class="section-title">Token Storage Trade-offs</div>
+    <pre style="color:#cbd5e1;font-size:0.78rem;line-height:1.6">ACCESS TOKEN:
+  ✅ In-memory variable (JS) — safest: cleared on page close, not accessible to other tabs
+  ⚠ localStorage — persistent, but readable by any XSS script
+  ⚠ sessionStorage — tab-scoped, cleared on tab close, but still XSS-readable
+
+REFRESH TOKEN:
+  ✅ httpOnly cookie — browser sends automatically, JS cannot read, safe from XSS
+     (set Secure + SameSite=Strict for CSRF protection)
+  ⚠ localStorage — readable by XSS, do not use for high-value refresh tokens
+  ✅ Secure native storage (mobile: iOS Keychain / Android Keystore)</pre>
+  </div>
+
+  <div class="flow-box">
+    <strong>🧪 Live Token Demo — Port 3061 (vulnerable)</strong>
+    <p style="font-size:0.82rem;color:#94a3b8;margin:0.75rem 0;max-width:640px">
+      Login sets an httpOnly cookie (<code style="color:#f87171">ar_refresh</code>) — JavaScript cannot read it, but the browser sends it automatically.
+      The vulnerability: clicking "Refresh" repeatedly always succeeds — the same cookie is never rotated.
+    </p>
+    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin:0.75rem 0">
+      <input class="field" id="live-user" value="alice" style="width:100px" placeholder="username">
+      <input class="field" id="live-pass" value="pass1234" style="width:130px" placeholder="password" type="password">
+      <button class="demo-btn" id="btn-live-login">Login → :3061</button>
+    </div>
+    <div style="margin-bottom:0.5rem">
+      <div style="font-size:0.75rem;color:#94a3b8">Access token (15 min JWT — visible in JS):</div>
+      <pre class="decoded-box" id="access-token-out" style="color:#a78bfa">–</pre>
+    </div>
+    <div style="margin-bottom:0.75rem">
+      <div style="font-size:0.75rem;color:#f87171">Refresh token (httpOnly cookie — JS cannot read value):</div>
+      <pre class="decoded-box" id="refresh-token-out" style="color:#94a3b8;font-size:0.75rem">Not yet set. Login first.</pre>
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
+      <button class="demo-btn" id="btn-live-api">GET /api/projects (uses access token)</button>
+      <button class="demo-btn" id="btn-live-refresh">POST /api/refresh (no body — cookie sent auto)</button>
+    </div>
+    <div class="result-banner" id="live-result"></div>
+    <pre class="decoded-box" id="api-out" style="min-height:60px">–</pre>
+  </div>
+
+  <div class="target-switcher">
+    <button type="button" class="btn-vulnerable" id="btn-vuln">Vulnerable Refresh (3061)</button>
+    <button type="button" class="btn-protected" id="btn-strong">Hardened Refresh (3063)</button>
+  </div>
+
+  <script>
+    function showResult(id, type, msg) {
+      var el = document.getElementById(id);
+      el.className = 'result-banner ' + type;
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    // Access token lives in JS memory — refresh token is in httpOnly cookie (ar_refresh on :3061)
+    var liveAccessToken = null;
+    var refreshCount = 0;
+
+    document.getElementById('btn-live-login').addEventListener('click', async function () {
+      var u = document.getElementById('live-user').value || 'alice';
+      var p = document.getElementById('live-pass').value || 'pass1234';
+      try {
+        // credentials: 'include' → browser stores the Set-Cookie from :3061 and sends it on future requests
+        var res = await fetch('http://localhost:3061/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ username: u, password: p })
+        });
+        var data = await res.json();
+        if (!res.ok) { showResult('live-result', 'failure', '✗ ' + data.error); return; }
+        liveAccessToken = data.accessToken;
+        refreshCount = 0;
+        document.getElementById('access-token-out').textContent = data.accessToken;
+        document.getElementById('refresh-token-out').textContent =
+          'ar_refresh cookie set by server (HttpOnly — JS cannot read the value).\n' +
+          'Check DevTools → Application → Cookies → http://localhost:3061\n\n' +
+          '⚠ Port 3061 vulnerability: this cookie never rotates and never expires.';
+        showResult('live-result', 'success', '✓ Logged in. ar_refresh cookie set. Access token in JS memory.');
+      } catch (e) {
+        showResult('live-result', 'failure', '✗ ' + e.message + ' — is port 3061 running?');
+      }
+    });
+
+    document.getElementById('btn-live-api').addEventListener('click', async function () {
+      if (!liveAccessToken) { showResult('live-result', 'failure', '✗ Login first'); return; }
+      try {
+        var res = await fetch('http://localhost:3061/api/projects', {
+          headers: { 'Authorization': 'Bearer ' + liveAccessToken },
+          credentials: 'include'
+        });
+        var data = await res.json();
+        document.getElementById('api-out').textContent = JSON.stringify(data, null, 2);
+        if (res.ok) {
+          showResult('live-result', 'success', '✓ 200 — access token valid');
+        } else {
+          showResult('live-result', 'failure', '✗ ' + res.status + ' — ' + data.error + ' → use refresh token');
+        }
+      } catch (e) { showResult('live-result', 'failure', '✗ ' + e.message); }
+    });
+
+    document.getElementById('btn-live-refresh').addEventListener('click', async function () {
+      if (!liveAccessToken && refreshCount === 0) {
+        showResult('live-result', 'failure', '✗ Login first'); return;
+      }
+      try {
+        // No body — browser sends ar_refresh cookie automatically (credentials: 'include')
+        var res = await fetch('http://localhost:3061/api/refresh', {
+          method: 'POST',
+          credentials: 'include'
+        });
+        var data = await res.json();
+        if (res.ok) {
+          refreshCount++;
+          liveAccessToken = data.accessToken;
+          document.getElementById('access-token-out').textContent = data.accessToken;
+          document.getElementById('refresh-token-out').textContent =
+            'ar_refresh cookie: SAME value as before (server issued no new Set-Cookie).\n' +
+            'Refresh #' + refreshCount + ' succeeded — the original cookie is still valid.\n\n' +
+            '⚠ PROOF: Same cookie accepted ' + refreshCount + ' time' + (refreshCount > 1 ? 's' : '') + ' in a row.\n' +
+            'An attacker who stole this cookie can call /api/refresh indefinitely.';
+          document.getElementById('api-out').textContent = JSON.stringify(data, null, 2);
+          showResult('live-result', refreshCount > 1 ? 'failure' : 'info',
+            refreshCount > 1
+              ? '⚠ Refresh #' + refreshCount + ' — same cookie still valid. No rotation, no expiry.'
+              : 'ℹ Refresh #1 — new access token issued. Click again to prove cookie never rotates.'
+          );
+        } else {
+          showResult('live-result', 'failure', '✗ ' + data.error);
+        }
+      } catch (e) { showResult('live-result', 'failure', '✗ ' + e.message); }
+    });
+
+    document.getElementById('btn-vuln').addEventListener('click', function () {
+      window.open('http://localhost:3061');
+    });
+    document.getElementById('btn-strong').addEventListener('click', function () {
+      window.open('http://localhost:3063');
+    });
+  </script>
+</body>
+</html>

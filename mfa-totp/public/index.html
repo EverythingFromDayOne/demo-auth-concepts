@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SecureVault — TOTP MFA</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="demo-banner"></div>
+  <div class="top">
+    <div><b>SecureVault</b> — Store and access your passwords securely</div>
+    <button id="btn-logout" class="btn secondary" style="display:none">Logout</button>
+  </div>
+  <div class="wrap">
+    <div id="dashboard" class="card" style="display:none">
+      <div id="dashboard-notice" class="mode-notice"></div>
+      <h3>Your vault</h3>
+      <table>
+        <thead><tr><th>Site</th><th>Username</th><th>Password</th></tr></thead>
+        <tbody id="vault"></tbody>
+      </table>
+      <div id="backup-panel" style="display:none;margin-top:1rem">
+        <h4>Backup codes (single use)</h4>
+        <pre id="backup-codes"></pre>
+      </div>
+    </div>
+    <div id="phase1" class="card">
+      <h3>Phase 1 — Password</h3>
+      <input id="username" class="login-input" value="alice" placeholder="username">
+      <div style="height:.6rem"></div>
+      <input id="password" type="password" class="login-input" value="pass1234" placeholder="password">
+      <div style="height:.8rem"></div>
+      <button id="btn-login" class="btn">Continue</button>
+      <div id="login-result" class="result"></div>
+    </div>
+    <div id="phase2" class="card" style="display:none">
+      <h3>Phase 2 — Authenticator code</h3>
+      <input id="totp-code" class="login-input" placeholder="123456">
+      <div style="height:.8rem"></div>
+      <button id="btn-verify" class="btn">Verify</button>
+      <a href="#" id="btn-show-backup" style="display:none;margin-left:.5rem">Lost your device? Use a backup code</a>
+      <div id="totp-result" class="result"></div>
+      <div id="backup-entry" style="display:none;margin-top:.7rem">
+        <input id="backup-code" class="login-input" placeholder="VAULT-XXXX">
+        <button id="btn-backup" class="btn">Use backup code</button>
+      </div>
+      <div id="totp-helper" style="margin-top:.75rem;padding:.6rem;background:#fef3c7;border:1px solid #d97706;border-radius:6px;font-size:.82rem;color:#78350f">
+        ⚠️ Demo helper: current code for <strong id="helper-username"></strong>:
+        <strong id="helper-code" style="font-family:monospace;font-size:1.1rem;letter-spacing:.15em">------</strong>
+        <span id="helper-timer" style="margin-left:.5rem;color:#92400e"></span>
+        <br><small id="helper-note">In production, only your authenticator app knows this code.</small>
+      </div>
+    </div>
+  </div>
+  <script>
+    let appMode = 'vulnerable';
+    let pendingToken = null;
+    let currentUsername = null;
+    let helperInterval = null;
+    let lockoutInterval = null;
+    let authToken = localStorage.getItem('svToken') || null;
+
+    fetch('/api/config').then(function (r) { return r.json(); }).then(function (cfg) {
+      appMode = cfg.mode;
+      var banner = document.getElementById('demo-banner');
+      if (cfg.mode === 'vulnerable') {
+        banner.style.cssText = 'background:#fffbeb;border-bottom:2px solid #f59e0b;color:#92400e;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '⚠ VULNERABLE: TOTP window is ±5 minutes (window:10). Same code accepted multiple times. No rate limit on /api/verify-totp.';
+      } else {
+        banner.style.cssText = 'background:#f0fdf4;border-bottom:2px solid #22c55e;color:#166534;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '✅ SECURE: window:1 (±30 s only). Replay prevention active. 5-attempt lockout with backup codes.';
+      }
+      var notice = document.getElementById('dashboard-notice');
+      if (cfg.mode === 'vulnerable') {
+        notice.className = 'mode-notice vulnerable';
+        notice.textContent = '⚠️ WEAK MFA: TOTP window is ±5 minutes (window:10). Same code accepted multiple times. No rate limit on /api/verify-totp.';
+      } else {
+        notice.className = 'mode-notice secure';
+        notice.textContent = '✅ HARDENED MFA: window:1 (±30 s only). Replay prevention active. 5-attempt lockout.';
+        document.getElementById('btn-show-backup').style.display = 'inline';
+      }
+    });
+
+    function showResult(id, type, msg) {
+      var e = document.getElementById(id);
+      e.className = 'result ' + type;
+      e.textContent = msg;
+      e.style.display = 'block';
+    }
+
+    function startLockoutCountdown(seconds) {
+      var r = seconds;
+      showResult('totp-result', 'failure', '🔒 Too many attempts. Locked for ' + r + 's');
+      clearInterval(lockoutInterval);
+      lockoutInterval = setInterval(function () {
+        r--;
+        if (r <= 0) {
+          clearInterval(lockoutInterval);
+          showResult('totp-result', 'info', 'Lockout expired — try again');
+        } else {
+          showResult('totp-result', 'failure', '🔒 Too many attempts. Locked for ' + r + 's');
+        }
+      }, 1000);
+    }
+
+    function hidePanels() {
+      document.getElementById('phase1').style.display = 'none';
+      document.getElementById('phase2').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'none';
+      document.getElementById('btn-logout').style.display = 'none';
+    }
+
+    function showLogin() {
+      hidePanels();
+      document.getElementById('phase1').style.display = 'block';
+      if (helperInterval) clearInterval(helperInterval);
+    }
+
+    async function loadDashboard() {
+      if (!authToken) { showLogin(); return; }
+      var r = await fetch('/api/vault', { headers: { Authorization: 'Bearer ' + authToken } });
+      if (!r.ok) {
+        localStorage.removeItem('svToken');
+        authToken = null;
+        showLogin();
+        return;
+      }
+      var d = await r.json();
+      hidePanels();
+      document.getElementById('dashboard').style.display = 'block';
+      document.getElementById('btn-logout').style.display = 'block';
+      document.getElementById('vault').innerHTML = d.map(function (x) {
+        return '<tr><td>' + x.site + '</td><td>' + x.username + '</td><td>' + x.passwordPreview + '</td></tr>';
+      }).join('');
+      if (appMode === 'secure') {
+        document.getElementById('backup-panel').style.display = 'block';
+        var bc = await fetch('/api/backup-codes', { headers: { Authorization: 'Bearer ' + authToken } })
+          .then(function (x) { return x.json(); })
+          .catch(function () { return { codes: [] }; });
+        document.getElementById('backup-codes').textContent = (bc.codes || []).length
+          ? (bc.codes || []).join('\n')
+          : 'No backup codes available for this account.';
+      }
+    }
+
+    function startHelperRefresh(username) {
+      document.getElementById('helper-username').textContent = username;
+      if (helperInterval) clearInterval(helperInterval);
+      helperInterval = setInterval(async function () {
+        try {
+          var r = await fetch('/api/current-totp?username=' + encodeURIComponent(username));
+          var d = await r.json();
+          document.getElementById('helper-code').textContent = d.code;
+          document.getElementById('helper-timer').textContent = '(' + d.secondsRemaining + 's)';
+        } catch (e) {}
+      }, 1000);
+    }
+
+    document.getElementById('totp-code').addEventListener('input', function () {
+      var raw = this.value.replace(/\D/g, '').slice(0, 6);
+      this.value = appMode === 'secure' && raw.length > 3 ? raw.slice(0, 3) + ' ' + raw.slice(3) : raw;
+    });
+
+    document.getElementById('btn-show-backup').addEventListener('click', function (e) {
+      e.preventDefault();
+      document.getElementById('backup-entry').style.display = 'block';
+    });
+
+    document.getElementById('btn-login').addEventListener('click', async function () {
+      try {
+        var username = document.getElementById('username').value;
+        var password = document.getElementById('password').value;
+        var r = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: username, password: password })
+        });
+        var d = await r.json();
+        if (!r.ok) return showResult('login-result', 'failure', '✗ ' + d.error);
+        if (d.mfaRequired) {
+          pendingToken = d.pendingToken;
+          currentUsername = username;
+          document.getElementById('phase1').style.display = 'none';
+          document.getElementById('phase2').style.display = 'block';
+          startHelperRefresh(username);
+          showResult('totp-result', 'info', 'Password accepted — enter your 6-digit authenticator code');
+        } else {
+          authToken = d.token;
+          localStorage.setItem('svToken', authToken);
+          loadDashboard();
+        }
+      } catch (e) {
+        showResult('login-result', 'failure', '✗ Network error — is the server running?');
+      }
+    });
+
+    document.getElementById('btn-verify').addEventListener('click', async function () {
+      var code = document.getElementById('totp-code').value.replace(/\s/g, '');
+      try {
+        var r = await fetch('/api/verify-totp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pendingToken: pendingToken, code: code })
+        });
+        var d = await r.json();
+        if (!r.ok) {
+          if (r.status === 429) {
+            var m = (d.error || '').match(/(\d+)s/);
+            startLockoutCountdown(m ? parseInt(m[1], 10) : 300);
+            return;
+          }
+          return showResult('totp-result', 'failure', '✗ ' + d.error);
+        }
+        if (helperInterval) clearInterval(helperInterval);
+        authToken = d.token;
+        localStorage.setItem('svToken', authToken);
+        loadDashboard();
+      } catch (e) {
+        showResult('totp-result', 'failure', '✗ ' + e.message);
+      }
+    });
+
+    document.getElementById('btn-backup').addEventListener('click', async function () {
+      try {
+        var backupCode = document.getElementById('backup-code').value;
+        var r = await fetch('/api/backup-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pendingToken: pendingToken, backupCode: backupCode })
+        });
+        var d = await r.json();
+        if (!r.ok) return showResult('totp-result', 'failure', '✗ ' + d.error);
+        if (helperInterval) clearInterval(helperInterval);
+        authToken = d.token;
+        localStorage.setItem('svToken', authToken);
+        showResult('totp-result', 'info', d.warning || 'Backup code accepted');
+        loadDashboard();
+      } catch (e) {
+        showResult('totp-result', 'failure', '✗ ' + e.message);
+      }
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', async function () {
+      if (authToken) {
+        await fetch('/api/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + authToken } }).catch(function () {});
+      }
+      localStorage.removeItem('svToken');
+      authToken = null;
+      showLogin();
+    });
+
+    loadDashboard();
+  </script>
+</body>
+</html>

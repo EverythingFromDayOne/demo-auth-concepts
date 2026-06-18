@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ConnectApp</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="demo-banner"></div>
+
+  <div id="home-view">
+    <div class="hero">
+      <h1>ConnectApp</h1>
+      <p style="color:#64748b;margin-bottom:2rem">Connect your tools, get things done.</p>
+      <a href="/connect" class="btn-connect">Connect with GitBucket</a>
+    </div>
+  </div>
+
+  <div id="dashboard-view" style="display:none" class="dashboard-body">
+    <header class="app-header">
+      <div class="logo">Connect<span>App</span></div>
+      <button class="btn-out" id="btn-signout">Sign Out</button>
+    </header>
+    <main>
+      <div class="card">
+        <div class="user-row">
+          <div class="avatar" id="user-avatar">?</div>
+          <div>
+            <div style="font-weight:600;font-size:1.1rem" id="user-name"></div>
+            <div style="color:#64748b;font-size:0.88rem" id="user-email"></div>
+            <div style="font-size:0.78rem;color:#16a34a;margin-top:0.25rem">✓ Connected via GitBucket OAuth</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:0.75rem">GitBucket Repositories</h3>
+        <table>
+          <thead><tr><th>Repo</th><th>Description</th><th>Stars</th><th>Visibility</th></tr></thead>
+          <tbody id="repos-body"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:0.75rem">OIDC id_token claims</h3>
+        <table id="claims-body"></table>
+        <p style="margin-top:0.75rem;font-size:0.8rem;color:#64748b">
+          access_token: <code id="access-token-preview"></code> (used for API calls — not sent to GitBucket as id_token)
+        </p>
+        <pre class="token-pre" id="id-token-raw" style="display:none"></pre>
+      </div>
+    </main>
+  </div>
+
+  <script>
+  fetch('/api/config').then(function (r) { return r.json(); }).then(function (cfg) {
+    var banner = document.getElementById('demo-banner');
+    if (cfg.mode === 'vulnerable') {
+      banner.style.cssText = 'background:#fffbeb;border-bottom:2px solid #f59e0b;color:#92400e;padding:0.65rem 1.5rem;font-size:0.85rem;text-align:center';
+      banner.textContent = '⚠ VULNERABLE: /connect generates no state parameter — CSRF attack possible. See the guide (port 3068) to understand the attack.';
+    } else {
+      banner.style.cssText = 'background:#f0fdf4;border-bottom:2px solid #22c55e;color:#166534;padding:0.65rem 1.5rem;font-size:0.85rem;text-align:center';
+      banner.textContent = '✅ SECURE: state parameter prevents CSRF. PKCE prevents authorization code interception.';
+    }
+  });
+
+  function showDashboard(data) {
+    document.getElementById('home-view').style.display = 'none';
+    document.getElementById('dashboard-view').style.display = '';
+    document.getElementById('user-avatar').textContent = data.profile.avatar || '?';
+    document.getElementById('user-name').textContent = data.profile.name;
+    document.getElementById('user-email').textContent = data.profile.email;
+    document.getElementById('access-token-preview').textContent = data.accessTokenPreview;
+
+    var reposBody = document.getElementById('repos-body');
+    (data.repos || []).forEach(function (r) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + r.name + '</td><td>' + r.description + '</td><td>' + r.stars + '</td><td>' + (r.private ? 'private' : 'public') + '</td>';
+      reposBody.appendChild(tr);
+    });
+
+    var claimsBody = document.getElementById('claims-body');
+    Object.keys(data.idClaims || {}).forEach(function (k) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td style="color:#64748b">' + k + '</td><td>' + data.idClaims[k] + '</td>';
+      claimsBody.appendChild(tr);
+    });
+
+    if (data.idToken) {
+      var pre = document.getElementById('id-token-raw');
+      pre.textContent = data.idToken;
+      pre.style.display = '';
+    }
+  }
+
+  fetch('/api/me').then(function (r) {
+    if (!r.ok) return null;
+    return r.json();
+  }).then(function (data) {
+    if (data) showDashboard(data);
+  });
+
+  document.getElementById('btn-signout').addEventListener('click', async function () {
+    await fetch('/api/disconnect', { method: 'POST' });
+    window.location.href = '/';
+  });
+  </script>
+</body>
+</html>

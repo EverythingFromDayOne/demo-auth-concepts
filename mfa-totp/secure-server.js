@@ -1,6 +1,7 @@
 /*
  * SecureVault (hardened TOTP) - port 3072
  */
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -13,6 +14,7 @@ const PORT = 3072;
 app.use(cors({ origin: 'http://localhost:3071' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+app.use(express.static(path.join(__dirname, 'public')));
 
 const USERS = [
   { username: 'alice', password: 'pass1234', fullName: 'Alice Chen', role: 'user', mfaEnabled: true, totpSecret: 'JBSWY3DPEHPK3PXP' },
@@ -182,46 +184,13 @@ app.post('/api/logout', requireAuth, (req, res) => {
   res.json({ message: 'Logged out' });
 });
 
-const HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SecureVault - Hardened TOTP</title>
-<style>
-*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8fafc;color:#0f172a}
-.top{background:#1e293b;color:#fff;padding:1rem 1.25rem;display:flex;justify-content:space-between;align-items:center}.top b{color:#a78bfa}
-.wrap{max-width:980px;margin:0 auto;padding:1.25rem}.card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:1rem;margin-bottom:1rem}
-.login-input{width:100%;padding:.6rem .75rem;border:1px solid #cbd5e1;border-radius:6px;font-size:.95rem;color:#0f172a;background:#fff;outline:none;box-sizing:border-box;font-family:inherit}
-.login-input:focus{border-color:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.15)} .btn{padding:.6rem .9rem;border:0;border-radius:6px;background:#7c3aed;color:#fff;cursor:pointer}
-.btn.secondary{background:#334155}.result{display:none;margin-top:.6rem;padding:.55rem .75rem;border-radius:6px;font-size:.84rem}.result.failure{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}.result.success{background:#dcfce7;color:#166534;border:1px solid #86efac}.result.info{background:#dbeafe;color:#1e3a8a;border:1px solid #93c5fd}
-pre{background:#0f172a;color:#cbd5e1;padding:.75rem;border-radius:8px;white-space:pre-wrap;min-height:70px} table{width:100%;border-collapse:collapse}th,td{padding:.6rem;border-bottom:1px solid #e2e8f0;text-align:left}
-</style></head><body>
-<div class="top"><div><b>SecureVault</b> - Store and access your passwords securely</div><button id="btn-logout" class="btn secondary" style="display:none">Logout</button></div>
-<div class="wrap">
-<div id="dashboard" class="card" style="display:none"><div style="background:#dcfce7;border:1px solid #16a34a;color:#166534;padding:.7rem;border-radius:8px;font-size:.84rem;margin-bottom:.8rem">
-✅ HARDENED MFA: window:1 (±30 s only). Replay prevention active. 5-attempt lockout.
-</div><h3>Your vault</h3><table><thead><tr><th>Site</th><th>Username</th><th>Password</th></tr></thead><tbody id="vault"></tbody></table>
-<div id="backup-panel" style="margin-top:1rem"><h4>Backup codes (single use)</h4><pre id="backup-codes"></pre></div>
-</div>
-<div id="phase1" class="card"><h3>Phase 1 - Password</h3><input id="username" class="login-input" value="alice" placeholder="username"><div style="height:.6rem"></div><input id="password" type="password" class="login-input" value="pass1234" placeholder="password"><div style="height:.8rem"></div><button id="btn-login" class="btn">Continue</button><div id="login-result" class="result"></div></div>
-<div id="phase2" class="card" style="display:none"><h3>Phase 2 - Authenticator code</h3><input id="totp-code" class="login-input" placeholder="123456"><div style="height:.8rem"></div><button id="btn-verify" class="btn">Verify</button> <a href="#" id="btn-show-backup">Lost your device? Use a backup code</a><div id="totp-result" class="result"></div>
-<div id="backup-entry" style="display:none;margin-top:.7rem"><input id="backup-code" class="login-input" placeholder="VAULT-XXXX"><button id="btn-backup" class="btn">Use backup code</button></div>
-<div id="totp-helper" style="margin-top:.75rem;padding:.6rem;background:#fef3c7;border:1px solid #d97706;border-radius:6px;font-size:.82rem;color:#78350f">⚠️ Demo helper: current code for <strong id="helper-username"></strong>: <strong id="helper-code" style="font-family:monospace;font-size:1.1rem;letter-spacing:.15em">------</strong> <span id="helper-timer" style="margin-left:.5rem;color:#92400e"></span></div>
-</div></div>
-<script>
-let pendingToken=null,currentUsername=null,helperInterval=null,lockoutInterval=null,authToken=localStorage.getItem('svToken')||null;
-function showResult(id,type,msg){const e=document.getElementById(id);e.className='result '+type;e.textContent=msg;e.style.display='block'}
-function startLockoutCountdown(seconds){let r=seconds;showResult('totp-result','failure','🔒 Too many attempts. Locked for '+r+'s');clearInterval(lockoutInterval);lockoutInterval=setInterval(()=>{r--;if(r<=0){clearInterval(lockoutInterval);showResult('totp-result','info','Lockout expired — try again')}else{showResult('totp-result','failure','🔒 Too many attempts. Locked for '+r+'s')}},1000)}
-function hidePanels(){document.getElementById('phase1').style.display='none';document.getElementById('phase2').style.display='none';document.getElementById('dashboard').style.display='none';document.getElementById('btn-logout').style.display='none'}
-function showLogin(){hidePanels();document.getElementById('phase1').style.display='block';if(helperInterval) clearInterval(helperInterval)}
-async function loadDashboard(){if(!authToken){showLogin();return;}const r=await fetch('/api/vault',{headers:{Authorization:'Bearer '+authToken}});if(!r.ok){localStorage.removeItem('svToken');authToken=null;showLogin();return;}const d=await r.json();hidePanels();document.getElementById('dashboard').style.display='block';document.getElementById('btn-logout').style.display='block';document.getElementById('vault').innerHTML=d.map(x=>'<tr><td>'+x.site+'</td><td>'+x.username+'</td><td>'+x.passwordPreview+'</td></tr>').join('');const bc=await fetch('/api/backup-codes',{headers:{Authorization:'Bearer '+authToken}}).then(x=>x.json()).catch(()=>({codes:[]}));document.getElementById('backup-codes').textContent=(bc.codes||[]).length?(bc.codes||[]).join('\\n'):'No backup codes available for this account.'}
-function startHelperRefresh(username){document.getElementById('helper-username').textContent=username;if(helperInterval) clearInterval(helperInterval);helperInterval=setInterval(async()=>{try{const r=await fetch('/api/current-totp?username='+encodeURIComponent(username));const d=await r.json();document.getElementById('helper-code').textContent=d.code;document.getElementById('helper-timer').textContent='('+d.secondsRemaining+'s)';}catch(e){}},1000)}
-document.getElementById('totp-code').addEventListener('input',function(){const raw=this.value.replace(/\\D/g,'').slice(0,6);this.value=raw.length>3?raw.slice(0,3)+' '+raw.slice(3):raw});
-document.getElementById('btn-show-backup').addEventListener('click',function(e){e.preventDefault();document.getElementById('backup-entry').style.display='block';});
-document.getElementById('btn-login').addEventListener('click',async function(){try{const username=document.getElementById('username').value;const password=document.getElementById('password').value;const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});const d=await r.json();if(!r.ok)return showResult('login-result','failure','✗ '+d.error);if(d.mfaRequired){pendingToken=d.pendingToken;currentUsername=username;document.getElementById('phase1').style.display='none';document.getElementById('phase2').style.display='block';startHelperRefresh(username);showResult('totp-result','info','Password accepted — enter your 6-digit authenticator code')}else{authToken=d.token;localStorage.setItem('svToken',authToken);loadDashboard()}}catch(e){showResult('login-result','failure','✗ Network error — is the server running?')}});
-document.getElementById('btn-verify').addEventListener('click',async function(){const code=document.getElementById('totp-code').value.replace(/\\s/g,'');try{const r=await fetch('/api/verify-totp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pendingToken,code})});const d=await r.json();if(!r.ok){if(r.status===429){const m=(d.error||'').match(/(\\d+)s/);startLockoutCountdown(m?parseInt(m[1],10):300);return;}return showResult('totp-result','failure','✗ '+d.error);}if(helperInterval) clearInterval(helperInterval);authToken=d.token;localStorage.setItem('svToken',authToken);loadDashboard()}catch(e){showResult('totp-result','failure','✗ '+e.message)}});
-document.getElementById('btn-backup').addEventListener('click',async function(){try{const backupCode=document.getElementById('backup-code').value;const r=await fetch('/api/backup-code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pendingToken,backupCode})});const d=await r.json();if(!r.ok)return showResult('totp-result','failure','✗ '+d.error);if(helperInterval) clearInterval(helperInterval);authToken=d.token;localStorage.setItem('svToken',authToken);showResult('totp-result','info',d.warning||'Backup code accepted');loadDashboard()}catch(e){showResult('totp-result','failure','✗ '+e.message)}});
-document.getElementById('btn-logout').addEventListener('click',async()=>{if(authToken){await fetch('/api/logout',{method:'POST',headers:{Authorization:'Bearer '+authToken}}).catch(()=>{})}localStorage.removeItem('svToken');authToken=null;showLogin()});
-loadDashboard();
-</script></body></html>`;
+app.get('/api/config', (_req, res) => {
+  res.json({ mode: 'secure', port: PORT });
+});
 
-app.get('/', (_req, res) => res.send(HTML));
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 app.listen(PORT, () => {
   console.log(`SecureVault (hardened TOTP) running at http://localhost:${PORT}`);

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NoteKeep</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="demo-banner"></div>
+
+  <div id="view-login" style="display:none">
+    <div class="login-card">
+      <h1>NoteKeep 📝</h1>
+      <p class="tagline">Your notes, always in sync</p>
+      <form id="login-form">
+        <div class="field-group">
+          <label for="u">Username</label>
+          <input class="login-input" type="text" id="u" name="username" autocomplete="username" required>
+        </div>
+        <div class="field-group">
+          <label for="p">Password</label>
+          <input class="login-input" type="password" id="p" name="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn-signin">Sign In</button>
+        <p id="err"></p>
+      </form>
+    </div>
+  </div>
+
+  <div id="view-dashboard" style="display:none">
+    <div class="layout">
+      <nav class="sidebar">
+        <div class="sidebar-logo">NoteKeep 📝</div>
+        <a href="#" class="active">All Notes</a>
+        <a href="#">Recent</a>
+        <a href="#">Archived</a>
+        <div class="sidebar-footer">
+          <button type="button" class="btn-logout" id="btn-logout">Log Out</button>
+        </div>
+      </nav>
+      <main class="main">
+        <div class="topbar">
+          <h2>My Notes</h2>
+          <div class="user-info" id="user-display">Loading…</div>
+        </div>
+        <div id="cookie-display">
+          <span id="cookie-label"></span> <code id="cookie-value"></code>
+        </div>
+        <p class="loading" id="loading">Loading notes…</p>
+        <div class="notes-grid" id="notes-grid"></div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    var appMode = 'vulnerable';
+
+    function showLogin() {
+      document.getElementById('view-login').style.display = 'flex';
+      document.getElementById('view-dashboard').style.display = 'none';
+    }
+
+    function showDashboard() {
+      document.getElementById('view-login').style.display = 'none';
+      document.getElementById('view-dashboard').style.display = 'block';
+      updateCookieDisplay();
+      loadNotes();
+    }
+
+    function updateCookieDisplay() {
+      var display = document.getElementById('cookie-display');
+      var label = document.getElementById('cookie-label');
+      var value = document.getElementById('cookie-value');
+      display.className = appMode === 'vulnerable' ? 'vulnerable' : 'secure';
+      if (appMode === 'vulnerable') {
+        label.textContent = 'Your session cookie (readable by JS):';
+        value.textContent = document.cookie || '(empty — HttpOnly would hide it)';
+      } else {
+        label.textContent = 'Session cookie:';
+        value.textContent = document.cookie
+          ? document.cookie
+          : '(HttpOnly — not visible to JavaScript)';
+      }
+    }
+
+    function loadNotes() {
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('notes-grid').innerHTML = '';
+      fetch('/api/notes', { credentials: 'same-origin' })
+        .then(function (res) {
+          if (!res.ok) throw new Error('unauthorized');
+          return res.json();
+        })
+        .then(function (notes) {
+          document.getElementById('loading').style.display = 'none';
+          var grid = document.getElementById('notes-grid');
+          notes.forEach(function (note) {
+            var card = document.createElement('div');
+            card.className = 'note-card';
+            card.innerHTML =
+              '<h3>' + note.title + '</h3>' +
+              '<p>' + note.body + '</p>' +
+              '<div class="meta">Updated ' + note.updatedAt + '</div>';
+            grid.appendChild(card);
+          });
+        })
+        .catch(function () {
+          showLogin();
+        });
+    }
+
+    fetch('/api/config').then(function (r) { return r.json(); }).then(function (cfg) {
+      appMode = cfg.mode;
+      var banner = document.getElementById('demo-banner');
+      if (cfg.mode === 'vulnerable') {
+        banner.style.cssText = 'background:#fffbeb;border-bottom:2px solid #f59e0b;color:#92400e;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '⚠ VULNERABLE: nk_session is set without HttpOnly — JavaScript can read document.cookie';
+      } else {
+        banner.style.cssText = 'background:#f0fdf4;border-bottom:2px solid #22c55e;color:#166534;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '✅ SECURE: HttpOnly + SameSite=Strict — document.cookie returns "" — XSS cannot steal this session token';
+      }
+      return fetch('/api/me', { credentials: 'same-origin' });
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error('unauthorized');
+        return res.json();
+      })
+      .then(function (data) {
+        showDashboard();
+        document.getElementById('user-display').textContent = data.fullName;
+        updateCookieDisplay();
+      })
+      .catch(function () {
+        showLogin();
+      });
+
+    document.getElementById('login-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          username: document.getElementById('u').value,
+          password: document.getElementById('p').value
+        })
+      })
+        .then(function (res) { return res.json().then(function (data) { return { res: res, data: data }; }); })
+        .then(function (result) {
+          if (result.res.ok) {
+            document.getElementById('err').textContent = '';
+            document.getElementById('user-display').textContent = result.data.user.fullName;
+            showDashboard();
+          } else {
+            document.getElementById('err').textContent = result.data.error;
+          }
+        });
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', function () {
+      fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
+        .finally(function () { showLogin(); });
+    });
+  </script>
+</body>
+</html>

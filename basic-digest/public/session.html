@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SimpleDesk — IT Helpdesk</title>
+  <link rel="stylesheet" href="/session.css">
+</head>
+<body>
+  <div id="view-login">
+    <div class="login-card">
+      <div class="logo">Simple<span>Desk</span></div>
+      <p class="tagline">Submit and track IT support tickets</p>
+      <form id="login-form">
+        <div class="field-group">
+          <label for="username">Username</label>
+          <input class="login-input" type="text" id="username" name="username" autocomplete="username" required>
+        </div>
+        <div class="field-group">
+          <label for="password">Password</label>
+          <input class="login-input" type="password" id="password" name="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn-signin">Sign In</button>
+        <p class="error" id="login-error">Invalid credentials. Try alice / pass1234</p>
+      </form>
+    </div>
+  </div>
+
+  <div id="view-dashboard" style="display:none">
+    <div id="demo-banner"></div>
+    <header class="topbar">
+      <div>
+        <span class="logo">Simple<span>Desk</span></span>
+        <span class="tagline">Submit and track IT support tickets</span>
+      </div>
+      <div class="topbar-right">
+        <div class="user-info" id="user-display">Loading…</div>
+        <button type="button" class="btn-logout" id="btn-logout">Log Out</button>
+      </div>
+    </header>
+    <div class="layout">
+      <nav class="sidebar">
+        <a href="#" class="active">Tickets</a>
+        <a href="#">Profile</a>
+      </nav>
+      <main class="main">
+        <div class="auth-note">
+          What's different vs Basic Auth:<br>
+          POST /api/login → credentials sent once → server returns random 64-char token<br>
+          GET  /api/tickets → Authorization: Bearer a3f9b2c1... (opaque, not your password)<br>
+          POST /api/logout  → sessions.delete(token) — impossible with Basic Auth
+        </div>
+        <h2>Support Tickets</h2>
+        <p class="loading" id="loading">Loading tickets…</p>
+        <table id="ticket-table" style="display:none">
+          <thead>
+            <tr><th>ID</th><th>Title</th><th>Priority</th><th>Status</th></tr>
+          </thead>
+          <tbody id="ticket-body"></tbody>
+        </table>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    function authHeaders() {
+      var token = localStorage.getItem('sdToken');
+      return token ? { 'Authorization': 'Bearer ' + token } : {};
+    }
+
+    function showLogin() {
+      document.getElementById('view-login').style.display = 'flex';
+      document.getElementById('view-dashboard').style.display = 'none';
+    }
+
+    function showDashboard() {
+      document.getElementById('view-login').style.display = 'none';
+      document.getElementById('view-dashboard').style.display = 'block';
+    }
+
+    function loadTickets() {
+      fetch('/api/tickets', { headers: authHeaders() })
+        .then(function (res) { return res.json(); })
+        .then(function (tickets) {
+          document.getElementById('loading').style.display = 'none';
+          var table = document.getElementById('ticket-table');
+          var tbody = document.getElementById('ticket-body');
+          tbody.innerHTML = '';
+          table.style.display = 'table';
+          tickets.forEach(function (t) {
+            var tr = document.createElement('tr');
+            tr.innerHTML =
+              '<td>' + t.id + '</td>' +
+              '<td>' + t.title + '</td>' +
+              '<td><span class="badge ' + t.priority + '">' + t.priority + '</span></td>' +
+              '<td><span class="badge ' + t.status + '">' + t.status + '</span></td>';
+            tbody.appendChild(tr);
+          });
+        });
+    }
+
+    fetch('/api/config').then(function (r) { return r.json(); }).then(function (cfg) {
+      var banner = document.getElementById('demo-banner');
+      if (cfg.mode === 'vulnerable') {
+        banner.style.cssText = 'background:#fffbeb;border-bottom:2px solid #f59e0b;color:#92400e;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '⚠ VULNERABLE: Basic Auth sends credentials on every request.';
+      } else {
+        banner.style.cssText = 'background:#f0fdf4;border-bottom:2px solid #22c55e;color:#166534;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '✅ SECURE: Session auth — credentials sent once at login. Token can be revoked with logout.';
+      }
+    });
+
+    fetch('/api/me', { headers: authHeaders() })
+      .then(function (res) {
+        if (!res.ok) throw new Error('unauthorized');
+        return res.json();
+      })
+      .then(function (data) {
+        showDashboard();
+        document.getElementById('user-display').textContent =
+          data.fullName + ' (' + data.username + ')';
+        loadTickets();
+      })
+      .catch(function () {
+        localStorage.removeItem('sdToken');
+        showLogin();
+      });
+
+    document.getElementById('login-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var username = document.getElementById('username').value;
+      var password = document.getElementById('password').value;
+      fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password })
+      })
+        .then(function (res) {
+          if (!res.ok) throw new Error('auth failed');
+          return res.json();
+        })
+        .then(function (data) {
+          localStorage.setItem('sdToken', data.token);
+          showDashboard();
+          document.getElementById('user-display').textContent =
+            data.user.fullName + ' (' + data.user.username + ')';
+          loadTickets();
+        })
+        .catch(function () {
+          document.getElementById('login-error').style.display = 'block';
+        });
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', function () {
+      fetch('/api/logout', {
+        method: 'POST',
+        headers: authHeaders()
+      }).finally(function () {
+        localStorage.removeItem('sdToken');
+        showLogin();
+      });
+    });
+  </script>
+</body>
+</html>

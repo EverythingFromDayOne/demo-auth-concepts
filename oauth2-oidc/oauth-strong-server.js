@@ -3,6 +3,7 @@
  * ConnectApp + GrantID + GitBucket — state + PKCE (port 3069)
  */
 
+const path = require('path');
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -15,6 +16,7 @@ const BASE = 'http://localhost:' + PORT;
 app.use(cors({ origin: 'http://localhost:3068' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ✅ PROTECTED: strong auth server secret
 const AUTH_SECRET = crypto.randomBytes(64).toString('hex');
@@ -64,31 +66,6 @@ function b64Decode(str) {
   }
 }
 
-function HOME_HTML() {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>ConnectApp</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #ffffff; color: #0f172a; min-height: 100vh; }
-    .banner { background: #dcfce7; border-bottom: 2px solid #16a34a; color: #166534; padding: 0.65rem 1.5rem; font-size: 0.85rem; text-align: center; }
-    .hero { max-width: 560px; margin: 5rem auto; padding: 2rem; text-align: center; }
-    h1 { font-size: 2rem; margin-bottom: 0.5rem; }
-  </style>
-</head>
-<body>
-  <div class="banner">✅ HARDENED: state parameter prevents CSRF. PKCE prevents authorization code interception.</div>
-  <div class="hero">
-    <h1>ConnectApp</h1>
-    <p style="color:#64748b;margin-bottom:2rem">Connect your tools, get things done.</p>
-    <a href="/connect" style="display:inline-block;background:#3b82f6;color:#fff;padding:0.85rem 1.75rem;border-radius:8px;text-decoration:none;font-weight:600">Connect with GitBucket</a>
-  </div>
-</body>
-</html>`;
-}
-
 function AUTHORIZE_HTML(opts) {
   const scopes = (opts.requestedScopes || []).filter(Boolean);
   const scopeList = scopes.map(function (s) {
@@ -127,43 +104,6 @@ label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.35re
 </form></div></body></html>`;
 }
 
-function DASHBOARD_HTML(data) {
-  const profile = data.profile;
-  const claims = data.idClaims || {};
-  const repos = data.repos || [];
-  const repoRows = repos.map(function (r) {
-    return '<tr><td>' + r.name + '</td><td>' + r.description + '</td><td>' + r.stars + '</td><td>' + (r.private ? 'private' : 'public') + '</td></tr>';
-  }).join('');
-  const claimsHtml = Object.keys(claims).map(function (k) {
-    return '<tr><td style="color:#64748b">' + k + '</td><td>' + claims[k] + '</td></tr>';
-  }).join('');
-
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><title>Dashboard — ConnectApp</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; color: #0f172a; }
-header { background: #0f172a; color: #fff; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
-.banner { background: #dcfce7; border-bottom: 1px solid #16a34a; color: #166534; padding: 0.6rem 1.5rem; font-size: 0.82rem; }
-main { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
-.card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 1.25rem; margin-bottom: 1.25rem; }
-.avatar { width: 48px; height: 48px; border-radius: 50%; background: #3b82f6; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; }
-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-th, td { padding: 0.6rem; border-bottom: 1px solid #e2e8f0; text-align: left; }
-.btn-out { background: transparent; border: 1px solid #64748b; color: #fff; padding: 0.4rem 0.85rem; border-radius: 6px; cursor: pointer; }
-pre { background: #0f172a; color: #cbd5e1; padding: 0.75rem; border-radius: 6px; font-size: 0.75rem; word-break: break-all; }
-</style></head><body>
-<header><div style="font-weight:600">Connect<span style="color:#3b82f6">App</span></div><button class="btn-out" id="btn-signout">Sign Out</button></header>
-<div class="banner">✅ HARDENED: state verified on callback. PKCE code_verifier required at token exchange. Replay of stolen codes blocked.</div>
-<main>
-<div class="card"><div style="display:flex;gap:1rem;align-items:center"><div class="avatar">${profile.avatar}</div><div><div style="font-weight:600">${profile.name}</div><div style="color:#64748b">${profile.email}</div></div></div></div>
-<div class="card"><h3 style="margin-bottom:0.75rem">GitBucket Repositories</h3><table><thead><tr><th>Repo</th><th>Description</th><th>Stars</th><th>Visibility</th></tr></thead><tbody>${repoRows}</tbody></table></div>
-<div class="card"><h3 style="margin-bottom:0.75rem">OIDC id_token claims</h3><table>${claimsHtml}</table><p style="margin-top:0.75rem;font-size:0.8rem;color:#64748b">access_token: <code>${data.accessTokenPreview}</code></p>${data.idToken ? '<pre style="margin-top:0.5rem">' + data.idToken + '</pre>' : ''}</div>
-</main>
-<script>document.getElementById('btn-signout').addEventListener('click',async()=>{await fetch('/api/disconnect',{method:'POST'});window.location.href='/';});</script>
-</body></html>`;
-}
-
 app.get('/auth/authorize', function (req, res) {
   const clientId = req.query.client_id;
   const redirectUri = req.query.redirect_uri;
@@ -181,6 +121,7 @@ app.get('/auth/authorize', function (req, res) {
   // ✅ PROTECTED: state required for hardened flow
   if (!state) return res.status(400).send('state parameter required');
 
+  // SSR required: OAuth params injected into hidden form fields
   res.send(AUTHORIZE_HTML({
     clientName: client.name,
     scope: scope,
@@ -322,7 +263,7 @@ app.get('/api/user/profile', requireAccessToken, function (req, res) {
 
 app.get('/', function (req, res) {
   if (sessions.get(getSid(req))) return res.redirect('/dashboard');
-  res.send(HOME_HTML());
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ✅ PROTECTED: generate state + PKCE challenge
@@ -394,11 +335,23 @@ app.get('/callback', async function (req, res) {
   }
 });
 
-app.get('/dashboard', async function (req, res) {
+app.get('/dashboard', function (req, res) {
   const session = sessions.get(getSid(req));
   if (!session) return res.redirect('/');
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/api/config', function (_req, res) {
+  res.json({ mode: 'secure', port: PORT });
+});
+
+app.get('/api/me', async function (req, res) {
+  const session = sessions.get(getSid(req));
+  if (!session) return res.status(401).json({ error: 'Not authenticated' });
 
   const idClaims = session.idToken ? b64Decode(session.idToken.split('.')[1]) : {};
+  const tokenInfo = accessTokens.get(session.accessToken);
+
   let repos = [];
   try {
     const reposRes = await fetch(BASE + '/api/repos', {
@@ -407,13 +360,17 @@ app.get('/dashboard', async function (req, res) {
     if (reposRes.ok) repos = await reposRes.json();
   } catch (e) {}
 
-  res.send(DASHBOARD_HTML({
+  res.json({
     profile: session.profile,
-    idClaims: idClaims,
+    username: session.profile.email,
+    email: session.profile.email,
+    scope: tokenInfo ? tokenInfo.scope : '',
+    accessToken: session.accessToken,
     accessTokenPreview: session.accessToken.substring(0, 8) + '...',
-    repos: repos,
     idToken: session.idToken,
-  }));
+    idClaims: idClaims,
+    repos: repos,
+  });
 });
 
 app.post('/api/disconnect', function (req, res) {

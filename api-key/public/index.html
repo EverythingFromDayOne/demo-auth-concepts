@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DataPipe API — Developer Playground</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="demo-banner"></div>
+  <header class="header">
+    <h1>Data<span>Pipe</span></h1>
+    <p class="tagline">Real-time data for your applications</p>
+  </header>
+  <div class="container">
+    <div class="card">
+      <h2>Try the API</h2>
+      <label for="api-key">Your API Key</label>
+      <input class="api-input" type="text" id="api-key"
+        value="sk_test_demo_c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0"
+        placeholder="sk_test_...">
+      <label id="url-label">Request URL (updates as you type)</label>
+      <div class="url-preview" id="url-preview">http://localhost:3055/api/weather?api_key=...</div>
+      <div id="header-section" style="display:none">
+        <label>Authorization header (key sent here)</label>
+        <div class="header-preview" id="header-preview">Authorization: Bearer sk_test_demo_...</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn" id="btn-weather">GET /api/weather</button>
+        <button class="btn" id="btn-analytics">GET /api/analytics</button>
+        <button class="btn secondary" id="btn-key-info">GET /api/key-info</button>
+      </div>
+      <label>Response</label>
+      <pre class="response" id="response-output">Click an endpoint to send a request</pre>
+    </div>
+    <div class="card">
+      <h2>Server Access Logs</h2>
+      <p class="logs-note" id="logs-note">
+        Every request is logged with the full URL — including your API key in the query string.
+      </p>
+      <div class="btn-row">
+        <button class="btn secondary" id="btn-refresh-logs">Refresh Logs</button>
+      </div>
+      <pre class="response" id="log-output">Make a request, then refresh logs</pre>
+    </div>
+  </div>
+  <script>
+    var cfg = { mode: 'vulnerable', port: 3055 };
+
+    fetch('/api/config').then(function (r) { return r.json(); }).then(function (c) {
+      cfg = c;
+      var banner = document.getElementById('demo-banner');
+      if (cfg.mode === 'vulnerable') {
+        banner.style.cssText = 'background:#fffbeb;border-bottom:2px solid #f59e0b;color:#92400e;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '⚠ VULNERABLE: API key is passed as a URL query parameter (?api_key=). It appears in server access logs, browser history, and Referer headers.';
+        document.getElementById('url-label').textContent = 'Request URL (updates as you type)';
+        document.getElementById('logs-note').textContent =
+          'Every request is logged with the full URL — including your API key in the query string.';
+      } else {
+        banner.style.cssText = 'background:#f0fdf4;border-bottom:2px solid #22c55e;color:#166534;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '✅ SECURE: API key is read from Authorization: Bearer header. URL is clean — key does not appear in logs, browser history, or Referer.';
+        document.getElementById('url-label').textContent = 'Request URL (clean — no key in URL)';
+        document.getElementById('url-preview').classList.add('secure');
+        document.getElementById('header-section').style.display = '';
+        document.getElementById('logs-note').textContent =
+          'Logs show clean URLs — the API key is in the Authorization header, not the request path.';
+      }
+      updatePreview();
+    });
+
+    function getKey() {
+      return document.getElementById('api-key').value.trim();
+    }
+
+    function updatePreview() {
+      var key = getKey();
+      var base = 'http://localhost:' + cfg.port;
+      if (cfg.mode === 'vulnerable') {
+        document.getElementById('url-preview').textContent =
+          base + '/api/weather?api_key=' + encodeURIComponent(key);
+      } else {
+        document.getElementById('url-preview').textContent = 'GET ' + base + '/api/weather';
+        document.getElementById('header-preview').textContent = 'Authorization: Bearer ' + key;
+      }
+    }
+
+    document.getElementById('api-key').addEventListener('input', updatePreview);
+
+    function callEndpoint(path) {
+      var key = getKey();
+      var opts = {};
+      if (cfg.mode === 'vulnerable') {
+        path = path + '?api_key=' + encodeURIComponent(key);
+      } else {
+        opts.headers = { 'Authorization': 'Bearer ' + key };
+      }
+      fetch(path, opts)
+        .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, data: d }; }); })
+        .then(function (r) {
+          document.getElementById('response-output').textContent = JSON.stringify(r.data, null, 2);
+          refreshLogs();
+        })
+        .catch(function (e) {
+          document.getElementById('response-output').textContent = 'Error: ' + e.message;
+        });
+    }
+
+    document.getElementById('btn-weather').addEventListener('click', function () { callEndpoint('/api/weather'); });
+    document.getElementById('btn-analytics').addEventListener('click', function () { callEndpoint('/api/analytics'); });
+    document.getElementById('btn-key-info').addEventListener('click', function () { callEndpoint('/api/key-info'); });
+
+    function refreshLogs() {
+      fetch('/api/logs')
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          document.getElementById('log-output').textContent =
+            data.note + '\n\n' +
+            data.log.map(function (l) {
+              return '[' + l.time + '] ' + l.method + ' ' + l.url;
+            }).join('\n');
+        });
+    }
+
+    document.getElementById('btn-refresh-logs').addEventListener('click', refreshLogs);
+  </script>
+</body>
+</html>

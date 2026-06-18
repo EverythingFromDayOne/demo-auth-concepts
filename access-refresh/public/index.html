@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlowAPI — Token Dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="demo-banner"></div>
+  <header class="topbar">
+    <div>
+      <div class="logo">Flow<span>API</span></div>
+      <div class="tagline">Ship faster, stay secure</div>
+    </div>
+    <button type="button" class="btn-signout" id="btn-signout">Sign Out</button>
+  </header>
+  <div class="container">
+    <div class="card" id="login-panel">
+      <h2>1. Login — httpOnly cookie + access token</h2>
+      <label>Username</label>
+      <input class="login-input" type="text" id="username" value="alice">
+      <label>Password</label>
+      <input class="login-input" type="password" id="password" value="pass1234">
+      <button class="btn" id="btn-login">Sign In</button>
+      <p id="err"></p>
+    </div>
+
+    <div class="card" id="token-status" style="display:none">
+      <h2>2. Token Status</h2>
+      <div style="margin-bottom:1rem">
+        <label>ACCESS TOKEN (expires in 15 min)</label>
+        <div class="token-box" id="access-token-display" style="color:#a78bfa"></div>
+      </div>
+      <div>
+        <label id="refresh-label">REFRESH TOKEN (httpOnly cookie)</label>
+        <div class="token-box" id="refresh-desc" style="color:#94a3b8;font-size:0.8rem"></div>
+      </div>
+      <div id="security-note"></div>
+    </div>
+
+    <div class="card" id="api-panel" style="display:none">
+      <h2>3. Test API (Access Token)</h2>
+      <button class="btn secondary" id="btn-me">GET /api/me</button>
+      <button class="btn secondary" id="btn-projects">GET /api/projects</button>
+      <pre class="response" id="api-output">Click an endpoint</pre>
+    </div>
+
+    <div class="card" id="refresh-panel" style="display:none">
+      <h2 id="refresh-panel-title">4. Refresh Access Token</h2>
+      <p id="refresh-panel-desc" style="font-size:0.85rem;color:#94a3b8;margin-bottom:0.75rem"></p>
+      <button class="btn" id="btn-refresh">POST /api/refresh</button>
+      <button class="btn danger" id="btn-change-pw" style="display:none">POST /api/change-password (revoke all sessions)</button>
+      <pre class="response" id="refresh-output">–</pre>
+    </div>
+  </div>
+  <script>
+  var liveAccessToken = null;
+  var appMode = 'vulnerable';
+
+  fetch('/api/config').then(function (r) { return r.json(); }).then(function (cfg) {
+    appMode = cfg.mode;
+    var banner = document.getElementById('demo-banner');
+    if (cfg.mode === 'vulnerable') {
+      banner.style.cssText = 'background:#fffbeb;border-bottom:2px solid #f59e0b;color:#92400e;padding:0.65rem 1.5rem;font-size:0.85rem';
+      banner.textContent = '⚠ VULNERABLE: Refresh tokens never expire and are never rotated on use.';
+      document.getElementById('refresh-label').textContent =
+        'REFRESH TOKEN (httpOnly cookie — survives F5, invisible to JS)';
+      document.getElementById('refresh-desc').innerHTML =
+        'Stored in <code style="color:#f87171">ar_refresh</code> httpOnly cookie. ' +
+        'JavaScript cannot read it — but it is sent automatically on every request to this origin.<br><br>' +
+        '⚠ Vulnerability: this cookie never expires and is never rotated on use.';
+      document.getElementById('security-note').innerHTML =
+        '<div class="warn-box">⚠ If an attacker steals this cookie (e.g. via network sniffing or server-side log exposure), ' +
+        'they can get new access tokens indefinitely — the refresh token has no expiry and is never rotated.</div>';
+      document.getElementById('refresh-panel-desc').textContent =
+        'When access token expires (15 min), call /api/refresh — the browser sends the httpOnly cookie automatically. ' +
+        'On this server, the same cookie stays valid forever.';
+      document.getElementById('btn-refresh').textContent = 'POST /api/refresh';
+    } else {
+      banner.style.cssText = 'background:#f0fdf4;border-bottom:2px solid #22c55e;color:#166534;padding:0.65rem 1.5rem;font-size:0.85rem';
+      banner.textContent = '✅ SECURE: Refresh tokens rotate on every use, expire after 7 days, and are revoked on password change.';
+      document.getElementById('refresh-label').textContent =
+        'REFRESH TOKEN (httpOnly cookie — rotates on every use, 7-day max age)';
+      document.getElementById('refresh-desc').innerHTML =
+        'Stored in <code style="color:#f87171">ar_refresh</code> httpOnly cookie. ' +
+        'JavaScript cannot read it — but it is sent automatically on every request to this origin.<br><br>' +
+        '✅ On each /api/refresh: old cookie cleared, new token issued in new cookie (rotation). ' +
+        'Reusing a rotated token triggers full family revocation.';
+      document.getElementById('security-note').innerHTML =
+        '<div class="ok-box">✅ Even if the refresh cookie is stolen, the attacker gets at most one use before the token ' +
+        'rotates. Reuse detection then revokes the entire token family immediately.</div>';
+      document.getElementById('refresh-panel-title').textContent = '4. Refresh + Security Actions';
+      document.getElementById('refresh-panel-desc').textContent = '';
+      document.getElementById('btn-refresh').textContent = 'POST /api/refresh (rotates cookie)';
+      document.getElementById('btn-change-pw').style.display = '';
+    }
+  });
+
+  function showDashboard(accessToken) {
+    liveAccessToken = accessToken;
+    document.getElementById('access-token-display').textContent = accessToken;
+    document.getElementById('login-panel').style.display = 'none';
+    document.getElementById('token-status').style.display = '';
+    document.getElementById('api-panel').style.display = '';
+    document.getElementById('refresh-panel').style.display = '';
+    document.getElementById('btn-signout').style.display = '';
+  }
+
+  function showLogin() {
+    liveAccessToken = null;
+    document.getElementById('token-status').style.display = 'none';
+    document.getElementById('api-panel').style.display = 'none';
+    document.getElementById('refresh-panel').style.display = 'none';
+    document.getElementById('btn-signout').style.display = 'none';
+    document.getElementById('login-panel').style.display = '';
+  }
+
+  (async function restoreSession() {
+    try {
+      var res = await fetch('/api/refresh', { method: 'POST', credentials: 'include' });
+      if (res.ok) {
+        var data = await res.json();
+        showDashboard(data.accessToken);
+      }
+    } catch (e) {}
+  })();
+
+  document.getElementById('btn-login').addEventListener('click', async function () {
+    document.getElementById('err').textContent = '';
+    var res = await fetch('/api/login', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value
+      })
+    });
+    var data = await res.json();
+    if (!res.ok) { document.getElementById('err').textContent = data.error; return; }
+    showDashboard(data.accessToken);
+  });
+
+  function callApi(path, outId) {
+    fetch(path, {
+      credentials: 'include',
+      headers: { 'Authorization': 'Bearer ' + liveAccessToken }
+    })
+      .then(function (res) { return res.json().then(function (d) { return { ok: res.ok, data: d }; }); })
+      .then(function (r) { document.getElementById(outId).textContent = JSON.stringify(r.data, null, 2); });
+  }
+
+  document.getElementById('btn-me').addEventListener('click', function () { callApi('/api/me', 'api-output'); });
+  document.getElementById('btn-projects').addEventListener('click', function () { callApi('/api/projects', 'api-output'); });
+
+  document.getElementById('btn-refresh').addEventListener('click', async function () {
+    var res = await fetch('/api/refresh', { method: 'POST', credentials: 'include' });
+    var data = await res.json();
+    document.getElementById('refresh-output').textContent = JSON.stringify(data, null, 2);
+    if (res.ok) {
+      liveAccessToken = data.accessToken;
+      document.getElementById('access-token-display').textContent = data.accessToken;
+    } else if (appMode === 'secure') {
+      showLogin();
+    }
+  });
+
+  document.getElementById('btn-change-pw').addEventListener('click', async function () {
+    var res = await fetch('/api/change-password', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + liveAccessToken
+      },
+      body: JSON.stringify({ newPassword: 'pass1234' })
+    });
+    var data = await res.json();
+    document.getElementById('refresh-output').textContent = JSON.stringify(data, null, 2);
+    if (res.ok) showLogin();
+  });
+
+  document.getElementById('btn-signout').addEventListener('click', async function () {
+    await fetch('/api/logout', { method: 'POST', credentials: 'include' }).catch(function () {});
+    showLogin();
+  });
+  </script>
+</body>
+</html>

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inkwell — Magic Link Sign In</title>
+  <link rel="stylesheet" href="/style.css">
+  <meta name="referrer" content="no-referrer">
+</head>
+<body>
+  <div id="demo-banner"></div>
+
+  <div id="login-view">
+    <div style="max-width:400px;margin:6rem auto;padding:2rem;background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
+      <div style="text-align:center;margin-bottom:2rem">
+        <div style="font-size:2rem">🖊️</div>
+        <h1 style="margin:0.5rem 0 0.25rem;font-size:1.5rem;color:#1c1917">Inkwell</h1>
+        <p style="color:#78716c;margin:0;font-size:0.9rem">Write, publish, share.</p>
+      </div>
+      <p style="color:#57534e;font-size:0.9rem;margin-bottom:1.25rem">
+        Enter your email to receive a sign-in link. No password needed.
+      </p>
+      <input class="login-input" id="email-input" type="email" placeholder="you@example.com" autofocus>
+      <button class="send-btn" id="btn-send">Send Magic Link</button>
+      <div class="result-banner" id="send-result"></div>
+      <div id="demo-link-panel" style="display:none" class="demo-panel-vuln">
+        <strong>⚠️ Demo mode:</strong> Your magic link (normally emailed):<br>
+        <a id="demo-link-anchor" href="#" style="color:#b45309;word-break:break-all;font-family:monospace;font-size:0.78rem"></a>
+        <br><br>
+        <span id="expiry-timer" style="font-size:0.75rem;color:#92400e;display:none;margin-top:0.5rem">
+          ⏱ Expires in <strong id="expiry-seconds">900</strong>s
+        </span>
+        <br>
+        <button id="btn-open-link" style="background:#d97706;color:#fff;border:none;padding:0.4rem 0.8rem;border-radius:4px;cursor:pointer;font-size:0.8rem;margin-top:0.5rem">Open Link →</button>
+        <button id="btn-open-link-again" style="margin-left:0.5rem;background:#92400e;color:#fff;border:none;padding:0.4rem 0.8rem;border-radius:4px;cursor:pointer;font-size:0.8rem">Open Again (replay test) →</button>
+      </div>
+      <p id="rate-note" class="rate-note" style="display:none">
+        Demo: after 3 sends per hour, further sends are silently dropped (same success message, no link).
+      </p>
+      <div id="error-banner" style="display:none;margin-top:1rem;padding:0.75rem;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;color:#b91c1c;font-size:0.85rem"></div>
+    </div>
+  </div>
+
+  <div id="dashboard-view" style="display:none">
+    <header>
+      <span class="logo" id="header-logo">Inkwell 🖊️</span>
+      <span class="plan" id="header-plan"></span>
+      <button id="btn-logout" style="background:#e7470a;color:#fff;border:none;padding:0.4rem 0.85rem;border-radius:6px;cursor:pointer;font-size:0.8rem;font-weight:600">Sign out</button>
+    </header>
+    <main style="max-width:900px;margin:2rem auto;padding:0 1.5rem">
+      <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#292524">Your posts</h2>
+      <div id="posts-container"></div>
+    </main>
+  </div>
+
+  <script>
+    var appMode = 'vulnerable';
+    var currentDemoLink = null;
+    var timerInterval = null;
+
+    function showResult(id, type, msg) {
+      var el = document.getElementById(id);
+      el.className = 'result-banner ' + type;
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function showLogin() {
+      document.getElementById('login-view').style.display = 'block';
+      document.getElementById('dashboard-view').style.display = 'none';
+    }
+
+    function showDashboard() {
+      document.getElementById('login-view').style.display = 'none';
+      document.getElementById('dashboard-view').style.display = 'block';
+    }
+
+    function renderPosts(posts) {
+      var container = document.getElementById('posts-container');
+      if (!posts || posts.length === 0) {
+        container.innerHTML = '<p class="posts-empty">No posts yet. Start writing!</p>';
+        return;
+      }
+      var html = '<table class="posts-table"><thead><tr>' +
+        '<th>Title</th><th>Status</th><th style="text-align:right">Views</th>' +
+        '</tr></thead><tbody>';
+      posts.forEach(function (p) {
+        html += '<tr><td style="color:#1c1917">' + p.title + '</td>' +
+          '<td style="color:#57534e">' + p.status + '</td>' +
+          '<td style="text-align:right;color:#78716c">' + p.views + '</td></tr>';
+      });
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+
+    function applyConfig(cfg) {
+      appMode = cfg.mode;
+      var banner = document.getElementById('demo-banner');
+      var panel = document.getElementById('demo-link-panel');
+      if (cfg.mode === 'vulnerable') {
+        banner.style.cssText = 'background:#fffbeb;border-bottom:2px solid #f59e0b;color:#92400e;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '⚠ VULNERABLE: Math.random() tokens. No expiry. Same link reusable. No rate limit on /api/auth/send-link.';
+        panel.className = 'demo-panel-vuln';
+      } else {
+        banner.style.cssText = 'background:#f0fdf4;border-bottom:2px solid #22c55e;color:#166534;padding:0.65rem 1.5rem;font-size:0.85rem';
+        banner.textContent = '✅ SECURE: 256-bit crypto.randomBytes token. 15-minute expiry. Single-use. Rate limited to 3/hour.';
+        panel.className = 'demo-panel-secure';
+        document.getElementById('expiry-timer').style.display = 'block';
+        document.getElementById('rate-note').style.display = 'block';
+        document.getElementById('btn-open-link').style.background = '#16a34a';
+        document.getElementById('btn-open-link-again').style.background = '#15803d';
+        document.getElementById('demo-link-anchor').style.color = '#166534';
+      }
+    }
+
+    function startExpiryTimer() {
+      var expirySeconds = 900;
+      if (timerInterval) clearInterval(timerInterval);
+      document.getElementById('expiry-seconds').textContent = expirySeconds;
+      timerInterval = setInterval(function () {
+        expirySeconds--;
+        var el = document.getElementById('expiry-seconds');
+        if (el) el.textContent = expirySeconds;
+        if (expirySeconds <= 0) {
+          clearInterval(timerInterval);
+          showResult('send-result', 'failure', '⏱ Link expired — request a new one');
+          document.getElementById('demo-link-panel').style.display = 'none';
+        }
+      }, 1000);
+    }
+
+    function showUrlError() {
+      var params = new URLSearchParams(window.location.search);
+      var error = params.get('error');
+      if (!error) return;
+      var messages = {
+        invalid_token: 'This link is invalid or has already been used.',
+        missing_token: 'No token found in this link.',
+        not_authenticated: 'Please sign in to continue.',
+        link_expired: 'This link has expired. Request a new one.'
+      };
+      var el = document.getElementById('error-banner');
+      el.textContent = messages[error] || 'Something went wrong — try again.';
+      el.style.display = 'block';
+    }
+
+    async function initApp() {
+      var cfg = await fetch('/api/config').then(function (r) { return r.json(); });
+      applyConfig(cfg);
+
+      var meRes = await fetch('/api/me', { credentials: 'same-origin' });
+      if (meRes.status === 401) {
+        showLogin();
+        showUrlError();
+        return;
+      }
+      if (!meRes.ok) {
+        showLogin();
+        showUrlError();
+        return;
+      }
+
+      var profileRes = await fetch('/api/profile', { credentials: 'same-origin' });
+      if (!profileRes.ok) {
+        showLogin();
+        return;
+      }
+      var profile = await profileRes.json();
+      document.getElementById('header-logo').textContent = 'Inkwell 🖊️ — ' + (profile.name || profile.email);
+      document.getElementById('header-plan').textContent = profile.plan + ' plan · ' + profile.email;
+      renderPosts(profile.posts);
+      showDashboard();
+    }
+
+    document.getElementById('btn-send').addEventListener('click', async function () {
+      var email = document.getElementById('email-input').value.trim();
+      if (!email) return;
+      this.disabled = true;
+      this.textContent = 'Sending...';
+      try {
+        var r = await fetch('/api/auth/send-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email })
+        });
+        var d = await r.json();
+        if (!r.ok) {
+          showResult('send-result', 'failure', '✗ ' + d.error);
+        } else {
+          showResult('send-result', 'success', '✅ ' + d.message);
+          if (d.demoLink) {
+            currentDemoLink = d.demoLink;
+            document.getElementById('demo-link-anchor').href = d.demoLink;
+            document.getElementById('demo-link-anchor').textContent = d.demoLink;
+            document.getElementById('demo-link-panel').style.display = 'block';
+            if (appMode === 'secure') startExpiryTimer();
+          } else {
+            document.getElementById('demo-link-panel').style.display = 'none';
+          }
+        }
+      } catch (e) {
+        showResult('send-result', 'failure', '✗ Network error — is the server running?');
+      }
+      this.disabled = false;
+      this.textContent = 'Send Magic Link';
+    });
+
+    document.getElementById('btn-open-link').addEventListener('click', function () {
+      if (currentDemoLink) window.location.href = currentDemoLink;
+    });
+
+    document.getElementById('btn-open-link-again').addEventListener('click', function () {
+      if (currentDemoLink) window.open(currentDemoLink, '_blank');
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', async function () {
+      await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+      window.location.href = '/';
+    });
+
+    initApp();
+  </script>
+</body>
+</html>
