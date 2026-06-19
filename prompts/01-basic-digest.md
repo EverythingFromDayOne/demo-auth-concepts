@@ -119,3 +119,127 @@ Top comment: `* Terminal 3: cd auth-concepts/basic-digest && npm run secure`
 - `fetch('/api/me')` with stored token → if 401 show login form, if 200 show dashboard
 - Login form → `POST /api/login` → store token in `sessionStorage` → reload
 - Dashboard: same SimpleDesk layout as basic server
+
+---
+
+## Inline Comments
+
+Every `// ⚠️` and `// ✅` comment must answer three questions:
+
+1. **What** is wrong (or fixed)
+2. **Why** it is exploitable (or why the fix is safe)
+3. **How** the attack works mechanically (step by step)
+
+Format:
+```js
+// ⚠️ VULNERABLE — <one-line summary>
+// <explanation: what is wrong, why it matters, how an attacker exploits it>
+// <mechanical detail: what the attacker does step by step, what they gain>
+const badThing = ...;
+
+// ✅ PROTECTED — <one-line summary>
+// <explanation: what the fix does and why it closes the attack vector>
+// <mechanical detail: what would need to be true for this to still fail>
+const goodThing = ...;
+```
+
+**Never shorten an existing comment. Only expand.**
+Annotate **vulnerable servers and secure servers only** — never guide servers.
+
+### basic-digest
+
+**`basic-digest/basic-server.js`** — root causes to annotate:
+- `basicAuth` function: credentials base64-encoded and sent on every request. `atob()` decodes them in one line in any browser console. No session = no logout. Every proxy log, CDN access log, and packet capture contains the plaintext-equivalent password.
+- No token issuance: the server is stateless, so there is nothing to invalidate if credentials are compromised.
+
+**`basic-digest/session-server.js`** — fixes to annotate:
+- Password sent once at `POST /api/login`, then discarded. Subsequent requests use an opaque random token.
+- `sessions.delete(token)` on logout genuinely invalidates access — server-side state makes revocation possible.
+- Token stored in `localStorage` and sent via `Authorization: Bearer` header. Scope-limited: only code that runs in this origin can read it.
+
+---
+
+## README
+
+Follow this canonical section order for this concept's `README.md`. Use `---` between every section:
+
+```
+# [Concept Name] — [App Name]
+(one-paragraph description)
+---
+## Port Reference
+---
+## How It Works
+---
+## The Vulnerability
+---
+## The Fix
+---
+## How to Run
+---
+## Demo Walkthrough
+---
+## Hardened Demo
+---
+## Vulnerable Lines
+---
+## Defense Details
+---
+## Credentials   ← only if needed; always last
+```
+
+**Section rename mappings:**
+
+| Old name | Canonical name |
+|----------|----------------|
+| `## How it works` | `## How It Works` |
+| `## Vulnerability (port XXXX)` | `## The Vulnerability` |
+| `## Fix (port XXXX)` | `## The Fix` |
+| `## Run the demo` / `## Run` | `## How to Run` |
+| `## Walkthrough` | `## Demo Walkthrough` |
+| `## Hardened Demo` / `## Protected Demo` | `## Hardened Demo` |
+| `## Key concepts` | `## Defense Details` |
+| `## Demo credentials` / `## Demo API keys` | `## Credentials` |
+| `## Ports` | `## Port Reference` |
+
+**Script names to fix:**
+
+| Old | Correct |
+|-----|---------|
+| `npm run basic` | `npm run vulnerable` |
+| `npm run session` (in basic-digest) | `npm run secure` |
+| `npm run url` | `npm run vulnerable` |
+| `npm run header` | `npm run secure` |
+| `npm run weak` | `npm run vulnerable` |
+| `npm run strong` | `npm run secure` |
+| `npm run hardened` | `npm run secure` |
+| `npm run session` (in session/) | `npm run vulnerable` |
+
+### Per-concept README instructions — basic-digest (SimpleDesk)
+
+This README already has excellent deep content. **Do not delete any existing section.**
+Restructure into canonical order and add the missing sections:
+
+**`## Vulnerable Lines`** — add this section with:
+```js
+// ⚠️ VULNERABLE — HTTP Basic Auth sends base64(username:password) on every request.
+// atob("YWxpY2U6cGFzczEyMzQ=") === "alice:pass1234" — one line in any browser console.
+function basicAuth(req, res, next) {
+  // ... Authorization: Basic <base64> checked on every single request
+  res.setHeader('WWW-Authenticate', 'Basic realm="SimpleDesk"');
+  return res.status(401).json({ error: 'Authentication required' });
+}
+```
+
+**`## Defense Details`** — consolidate existing "Session Auth (port 3051)", "When Basic Auth is acceptable", "Digest Auth" sections under this heading with sub-headings:
+- `### Why session tokens fix the problem`
+- `### Digest Auth — the fix that wasn't`
+- `### When Basic Auth is acceptable in the real world`
+
+Keep all existing prose verbatim within those sub-sections.
+
+**`## Hardened Demo`** — add:
+1. Open `localhost:3051` — login with `alice / pass1234`
+2. Open DevTools → Network → any request — `Authorization` header shows `Bearer a3f9...`, not base64 credentials
+3. `POST /api/logout` → server calls `sessions.delete(token)` — the token is immediately invalid
+4. Attempt the old `atob()` trick in the console — there is no `Authorization: Basic` header to decode

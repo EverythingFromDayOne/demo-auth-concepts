@@ -182,3 +182,181 @@ Thin static server serving `public/guide.html`.
 - Title: "OAuth2 & OIDC"
 - Target switcher: "Vulnerable OAuth2 (3067)" dark slate, "Hardened OAuth2 (3069)" green `#16a34a`
 - Content: authorization code flow diagram (5 steps), what state parameter prevents (CSRF walkthrough), PKCE flow (verifier → challenge → verify), OIDC id_token claims, comparison table (no state vs state vs state+PKCE).
+
+---
+
+## Inline Comments
+
+Every `// ⚠️` and `// ✅` comment must answer three questions:
+
+1. **What** is wrong (or fixed)
+2. **Why** it is exploitable (or why the fix is safe)
+3. **How** the attack works mechanically (step by step)
+
+Format:
+```js
+// ⚠️ VULNERABLE — <one-line summary>
+// <explanation: what is wrong, why it matters, how an attacker exploits it>
+// <mechanical detail: what the attacker does step by step, what they gain>
+const badThing = ...;
+
+// ✅ PROTECTED — <one-line summary>
+// <explanation: what the fix does and why it closes the attack vector>
+// <mechanical detail: what would need to be true for this to still fail>
+const goodThing = ...;
+```
+
+**Never shorten an existing comment. Only expand.**
+Annotate **vulnerable servers and secure servers only** — never guide servers.
+
+### oauth2-oidc
+
+**`oauth2-oidc/oauth-server.js`** — root causes to annotate:
+- No `state` parameter: ConnectApp does not generate or validate a CSRF token in the OAuth flow. An attacker can pre-initiate an authorization request, obtain an auth code bound to the attacker's account, then trick the victim into visiting `/callback?code=ATTACKER_CODE`. The victim's ConnectApp session becomes linked to the attacker's GrantID account. The attacker then logs into ConnectApp using their own credentials and has access to whatever the victim's ConnectApp session can do.
+- No PKCE: without a code challenge, an auth code intercepted in transit (e.g. from a log, a compromised redirect) can be exchanged for tokens by any party — the `/auth/token` endpoint accepts codes unconditionally.
+
+**`oauth2-oidc/oauth-strong-server.js`** — fixes to annotate:
+- `state` parameter: ConnectApp generates `crypto.randomBytes(16).toString('hex')`, stores it in session, and sends it in the authorization URL. On callback, it checks `req.query.state === req.session.oauthState`. A forged callback with a mismatched state is rejected before any code exchange happens.
+- PKCE: ConnectApp generates a random `code_verifier`, derives `code_challenge = SHA256(verifier)`, and sends the challenge with the authorization request. The `/auth/token` endpoint re-derives the challenge from the submitted verifier and compares — if they don't match, the code is invalid. Even if the auth code is intercepted, it's useless without the verifier that only the legitimate client knows.
+
+---
+
+## README
+
+Follow this canonical section order for this concept's `README.md`. Use `---` between every section:
+
+```
+# [Concept Name] — [App Name]
+(one-paragraph description)
+---
+## Port Reference
+---
+## How It Works
+---
+## The Vulnerability
+---
+## The Fix
+---
+## How to Run
+---
+## Demo Walkthrough
+---
+## Hardened Demo
+---
+## Vulnerable Lines
+---
+## Defense Details
+---
+## Credentials   ← only if needed; always last
+```
+
+**Section rename mappings:**
+
+| Old name | Canonical name |
+|----------|----------------|
+| `## How it works` | `## How It Works` |
+| `## Vulnerability (port XXXX)` | `## The Vulnerability` |
+| `## Fix (port XXXX)` | `## The Fix` |
+| `## Run the demo` / `## Run` | `## How to Run` |
+| `## Walkthrough` | `## Demo Walkthrough` |
+| `## Hardened Demo` / `## Protected Demo` | `## Hardened Demo` |
+| `## Key concepts` | `## Defense Details` |
+| `## Demo credentials` / `## Demo API keys` | `## Credentials` |
+| `## Ports` | `## Port Reference` |
+
+**Script names to fix:**
+
+| Old | Correct |
+|-----|---------|
+| `npm run basic` | `npm run vulnerable` |
+| `npm run session` (in basic-digest) | `npm run secure` |
+| `npm run url` | `npm run vulnerable` |
+| `npm run header` | `npm run secure` |
+| `npm run weak` | `npm run vulnerable` |
+| `npm run strong` | `npm run secure` |
+| `npm run hardened` | `npm run secure` |
+| `npm run session` (in session/) | `npm run vulnerable` |
+
+### Per-concept README instructions — oauth2-oidc (ConnectApp + GrantID)
+
+**`## How It Works`** — expand the 5-step flow with PKCE:
+
+```
+1. ConnectApp generates:
+     state         = crypto.randomBytes(16).toString('hex')        [hardened only]
+     code_verifier = crypto.randomBytes(32).toString('base64url')  [hardened only]
+     code_challenge = SHA256(code_verifier)                         [hardened only]
+
+2. ConnectApp redirects to GrantID /auth/authorize:
+     ?client_id=connectapp-client-id
+     &redirect_uri=http://localhost:3069/callback
+     &scope=openid profile email
+     &state=<state>                    [hardened only]
+     &code_challenge=<challenge>       [hardened only]
+     &code_challenge_method=S256       [hardened only]
+
+3. User logs in at GrantID and approves scopes
+
+4. GrantID redirects to ConnectApp:
+     /callback?code=<auth_code>&state=<state>
+
+5. ConnectApp verifies state [hardened only], exchanges code:
+     POST /auth/token { code, client_id, client_secret, code_verifier }
+                                                           [hardened only]
+
+6. GrantID validates code + PKCE → returns { access_token, id_token }
+
+7. ConnectApp calls GitBucket API with access_token
+   Decodes id_token to get user identity (OIDC)
+```
+
+**Note:** The `/auth/authorize` authorization page must use `res.send()` for SSR (hidden form fields). Do not convert to JSON.
+
+**`## The Vulnerability`** — two separate attacks:
+
+**Attack 1 — CSRF (no state):**
+```
+1. Attacker initiates OAuth flow with their own GrantID account → gets auth code
+2. Attacker stops before /callback — does NOT exchange the code
+3. Attacker tricks victim into loading: /callback?code=ATTACKER_CODE
+4. Victim's ConnectApp (no state check) exchanges the code → gets tokens for ATTACKER's account
+5. Victim's ConnectApp session is now linked to the attacker's GitBucket identity
+6. Attacker logs into ConnectApp normally → shares victim's ConnectApp session data
+```
+
+**Attack 2 — Code interception (no PKCE):**
+```
+1. Auth code appears in the redirect URL: /callback?code=abc123
+2. Code logged by reverse proxies, visible in browser history, leakable via Referer header
+3. Attacker captures the code and races to POST /auth/token { code: "abc123" }
+4. No code_verifier check → tokens issued to attacker
+```
+
+**`## Vulnerable Lines`**:
+```js
+// In GET /callback (vulnerable server):
+// ⚠️ VULNERABLE — state not generated, not stored, not validated on return
+// Any request to /callback with a valid code is accepted, regardless of who initiated the flow
+const code = req.query.code;
+// req.query.state is ignored entirely
+
+// In POST /auth/token (vulnerable server):
+// ⚠️ VULNERABLE — no code_challenge/code_verifier check
+// Any party that has the auth code can exchange it for tokens
+const stored = authCodes.get(code);
+if (!stored) return res.status(400).json({ error: 'invalid_grant' });
+authCodes.delete(code);
+// code_verifier never checked
+```
+
+**`## Defense Details`**:
+- `### State parameter (CSRF protection)` — cryptographic binding between the authorize request and the callback. State is generated by the client, stored in session, compared on callback. A forged callback will have a mismatched state and is rejected before any code exchange.
+- `### PKCE (code interception protection)` — code_verifier is a random secret held only by the legitimate client. The challenge (SHA256 of verifier) is sent with the authorize request. Any party that intercepts the auth code still cannot exchange it without the verifier that only the legitimate client knows.
+- `### Why both are needed` — state protects who initiates the flow; PKCE protects who exchanges the code. They are independent defenses against different attack vectors.
+
+**`## Hardened Demo`**:
+1. Open `localhost:3069` — open DevTools Network tab, click **Connect with GitBucket**
+2. Observe the authorize URL: contains `state=...` and `code_challenge=...`
+3. After login, observe `/callback?code=...&state=...`
+4. Try `/callback?code=fake&state=wrong` — state mismatch error
+5. Try exchanging a valid auth code without `code_verifier` (use curl/fetch directly) — rejected
